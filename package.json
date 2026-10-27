@@ -1,0 +1,28 @@
+{
+  "name": "erp-ahr",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "api": "node --experimental-strip-types --env-file=.env server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --experimental-strip-types --test tests/erp/domain.test.ts tests/erp/assinatura.test.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.5",
+    "@tanstack/react-query": "^5.101.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.9.4",
+    "sonner": "^2.0.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.0.4",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.5"
+  }
+}
