@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { createClient } from "@supabase/supabase-js";
 import { DomainError, adicionaisDeJson, agendaDeJson, formatBrl, htmlAdicionais, htmlAgenda, reaisToCents } from "../src/services/erp/domain.ts";
 import { executarAssinatura, executarAssinaturaPublica, propostaIdDaAssinatura } from "./assinaturas.ts";
+import { lerPdfDoTitulo } from "./boleto-cora.ts";
 import { executarGravacao } from "./gravacoes.ts";
 import { dataPropostaExtenso, docxParaPdf, preencherModeloDoDisco } from "./proposta-docx.ts";
 
@@ -200,6 +201,27 @@ const server = createServer((req, res) => {
       const acesso = await papelDe(tokenDe(req), true);
       if (acesso.papel) json(res, 200, { papel: acesso.papel });
       else json(res, acesso.status, { message: acesso.message ?? "Sem papel de equipe." });
+      return;
+    }
+    const pdfBoleto = /^\/api\/titulos\/([0-9a-f-]{36})\/boleto\.pdf$/i.exec(caminho);
+    if (req.method === "GET" && pdfBoleto) {
+      const acesso = await papelDe(tokenDe(req));
+      if (!acesso.papel) {
+        json(res, acesso.status, { message: acesso.message ?? "Sem papel de equipe." });
+        return;
+      }
+      try {
+        const arquivo = await lerPdfDoTitulo(admin, pdfBoleto[1]);
+        res.writeHead(200, {
+          "content-type": "application/pdf",
+          "content-disposition": "inline; filename=\"boleto.pdf\"",
+          "cache-control": "no-store",
+        });
+        res.end(arquivo);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Não foi possível abrir o PDF.";
+        json(res, error instanceof DomainError ? 404 : 500, { message });
+      }
       return;
     }
     const pdf = /^\/api\/propostas\/([0-9a-f-]{36})\/pdf$/i.exec(url);

@@ -47,6 +47,7 @@ import {
   type PropostaStatus,
 } from "../src/services/erp/domain.ts";
 import { validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
+import { emitirBoletoDoTitulo, enviarBoletoDoTitulo } from "./boleto-cora.ts";
 
 type Banco = SupabaseClient;
 
@@ -198,6 +199,10 @@ export async function executarGravacao(
       return statusBoleto(db, dados);
     case "boleto.quitar":
       return quitarBoleto(db, dados);
+    case "boleto.emitir":
+      return emitirBoletoDoTitulo(db, idDe(dados.tituloId, "Título"));
+    case "boleto.enviar":
+      return enviarBoletoDoTitulo(db, idDe(dados.tituloId, "Título"), dados.contatoIds);
     case "titulo.baixa":
       return baixaTitulo(db, dados);
     default:
@@ -876,10 +881,32 @@ function exigirTitulos(error: { message: string; code?: string } | null): void {
 
 const TITULO_SELECT = "*, clients(name), erp_nfse(*), erp_boletos(*), erp_contratos(status, centro_custo_id)";
 
+function sanearBoleto(boleto: unknown): unknown {
+  if (Array.isArray(boleto)) return boleto.map(sanearBoleto);
+  if (!boleto || typeof boleto !== "object") return boleto;
+  const row = { ...(boleto as Record<string, unknown>) };
+  const caminho = typeof row.pdf_path === "string" ? row.pdf_path.trim() : "";
+  row.tem_pdf = caminho.length > 0;
+  delete row.pdf_path;
+  delete row.url_pdf;
+  return row;
+}
+
+function sanearTitulo(row: unknown): unknown {
+  if (!row || typeof row !== "object") return row;
+  const titulo = { ...(row as Record<string, unknown>) };
+  if ("erp_boletos" in titulo) titulo.erp_boletos = sanearBoleto(titulo.erp_boletos);
+  return titulo;
+}
+
+function titulosDe(rows: unknown[] | null | undefined): unknown[] {
+  return (rows ?? []).map(sanearTitulo);
+}
+
 async function listarTitulos(db: Banco): Promise<{ titulos: unknown[] }> {
   const { data, error } = await db.from("erp_contas_receber").select(TITULO_SELECT).order("vencimento");
   exigirTitulos(error);
-  return { titulos: data ?? [] };
+  return { titulos: titulosDe(data) };
 }
 
 async function obterTitulo(db: Banco, dados: Record<string, unknown>): Promise<{ titulos: unknown[] }> {
@@ -887,7 +914,7 @@ async function obterTitulo(db: Banco, dados: Record<string, unknown>): Promise<{
   const { data, error } = await db.from("erp_contas_receber").select(TITULO_SELECT).eq("id", id).maybeSingle();
   exigirTitulos(error);
   if (!data) throw new DomainError("Título não encontrado.");
-  return { titulos: [data] };
+  return { titulos: [sanearTitulo(data)] };
 }
 
 async function listarTitulosAvulsos(db: Banco): Promise<{ titulos: unknown[] }> {
@@ -898,7 +925,7 @@ async function listarTitulosAvulsos(db: Banco): Promise<{ titulos: unknown[] }> 
     .is("contrato_id", null)
     .order("vencimento");
   exigirTitulos(error);
-  return { titulos: data ?? [] };
+  return { titulos: titulosDe(data) };
 }
 
 async function listarTitulosDaProposta(db: Banco, dados: Record<string, unknown>): Promise<{ titulos: unknown[] }> {
@@ -909,7 +936,7 @@ async function listarTitulosDaProposta(db: Banco, dados: Record<string, unknown>
     .eq("proposta_id", propostaId)
     .order("parcela");
   exigirTitulos(error);
-  return { titulos: data ?? [] };
+  return { titulos: titulosDe(data) };
 }
 
 function listaTexto(dados: Record<string, unknown>, chave: string): string[] {

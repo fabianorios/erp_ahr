@@ -646,6 +646,11 @@ export type TituloItem = {
     status: BoletoStatus;
     meio: MeioBoleto | null;
     linha: string | null;
+    codigoBarras: string | null;
+    pix: string | null;
+    coraId: string | null;
+    coraStatus: string | null;
+    temPdf: boolean;
   } | null;
 };
 
@@ -698,7 +703,12 @@ function mapTitulo(row: any): TituloItem {
           vencimento: dia(boleto.vencimento),
           status: boleto.status,
           meio: boleto.meio,
-          linha: boleto.linha_digitavel,
+          linha: boleto.linha_digitavel ?? null,
+          codigoBarras: boleto.codigo_barras ?? null,
+          pix: boleto.pix_emv ?? null,
+          coraId: boleto.cora_invoice_id ?? null,
+          coraStatus: boleto.cora_status ?? null,
+          temPdf: Boolean(boleto.tem_pdf) || (typeof boleto.pdf_path === "string" && boleto.pdf_path.trim().length > 0),
         }
       : null,
   };
@@ -914,6 +924,41 @@ export async function gravarNfse(
 export async function anularNfse(titulo: TituloItem): Promise<void> {
   cancelarNfse(titulo.nfse?.status ?? "ausente");
   await escrever("nfse.anular", { tituloId: titulo.id });
+}
+
+export async function emitirBoletoCora(tituloId: string): Promise<string | undefined> {
+  const corpo = await escrever("boleto.emitir", { tituloId });
+  return corpo.aviso;
+}
+
+export async function enviarBoletoCora(tituloId: string, contatoIds: string[]): Promise<string | undefined> {
+  const corpo = await escrever("boleto.enviar", { tituloId, contatoIds });
+  return corpo.aviso;
+}
+
+export async function abrirPdfBoleto(tituloId: string): Promise<void> {
+  if (!supabase) throw new DomainError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente deste ERP.");
+  const sessao = await supabase.auth.getSession();
+  const token = sessao.data.session?.access_token;
+  if (!token) throw new DomainError("Entre de novo.");
+  const resposta = await fetch(`/api/titulos/${tituloId}/boleto.pdf`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resposta.ok) {
+    const corpo = (await resposta.json().catch(() => ({}))) as { message?: string };
+    throw new DomainError(corpo.message ?? "Não foi possível abrir o PDF.");
+  }
+  const blob = await resposta.blob();
+  const url = URL.createObjectURL(blob);
+  const aberto = window.open(url, "_blank", "noopener");
+  if (!aberto) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.click();
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export async function gravarBoleto(

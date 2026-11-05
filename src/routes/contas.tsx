@@ -7,9 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AvisoConsulta, Campo, CampoDinheiro, TituloPagina, executar, reaisInput } from "@/components/erp/apresentacao";
 import { AtalhoConsulta } from "@/components/erp/atalho-consulta";
+import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
 import { atualizarTitulo, criarTituloAvulso, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
+import { reaisToCents } from "@/services/erp/domain";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
 const vazio = {
@@ -88,6 +90,13 @@ export function ContasPage() {
 
   const avulso = !editando || (!editando.propostaId && !editando.contratoId);
   const podeMudar = !editando || (editando.status === "previsto" && !editando.nfse && !editando.boleto);
+  const alterado = Boolean(
+    editando &&
+      (form.descricao.trim() !== editando.descricao ||
+        form.clienteId !== (editando.clienteId ?? "") ||
+        (form.vencimentos[0] ?? "") !== editando.vencimento ||
+        centavosDoForm(form.valor) !== editando.valor),
+  );
 
   async function recarregar() {
     await qc.invalidateQueries({ queryKey: ["erp", "titulos"] });
@@ -98,7 +107,7 @@ export function ContasPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <TituloPagina
           titulo="Manutenção de contas a receber"
-          descricao="Cadastro do título, depois os dados financeiros. Um título previsto, sem NFS-e e sem boleto, pode ser editado ou excluído."
+          descricao="Cadastro do título, depois os dados financeiros. No título salvo, Emitir boleto registra a cobrança na Cora e guarda o PDF aqui. Um título previsto, sem NFS-e e sem boleto, pode ser editado ou excluído."
         />
         <AtalhoConsulta />
       </div>
@@ -293,6 +302,15 @@ export function ContasPage() {
           </CardContent>
         </Card>
       )}
+      {canEdit && editando && <BoletoTitulo titulo={editando} alterado={alterado} onMudou={recarregar} />}
     </div>
   );
+}
+
+function centavosDoForm(valor: string): number | null {
+  try {
+    return reaisToCents(valor);
+  } catch {
+    return null;
+  }
 }

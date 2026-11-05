@@ -1,0 +1,156 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { AvisoConsulta, Pill, executar, reais, dataBr } from "@/components/erp/apresentacao";
+import { abrirPdfBoleto, emitirBoletoCora, enviarBoletoCora, listarContatos, type TituloItem } from "@/services/erp/api";
+import { DomainError } from "@/services/erp/domain";
+
+const STATUS_CORA: Record<string, string> = {
+  DRAFT: "Rascunho",
+  OPEN: "Aberto",
+  LATE: "Atrasado",
+  IN_PAYMENT: "Em pagamento",
+  PAID: "Pago",
+  CANCELLED: "Cancelado",
+};
+
+export function BoletoTitulo({
+  titulo,
+  alterado,
+  onMudou,
+}: {
+  titulo: TituloItem;
+  alterado: boolean;
+  onMudou: () => Promise<void>;
+}) {
+  const boleto = titulo.boleto;
+  const cora = Boolean(boleto?.coraId);
+  const podeEmitir = !boleto && (titulo.status === "previsto" || titulo.status === "faturado");
+  const [escolhendo, setEscolhendo] = useState(false);
+  const [marcados, setMarcados] = useState<string[]>([]);
+  const [ocupado, setOcupado] = useState(false);
+  const contatos = useQuery({
+    queryKey: ["erp", "contatos", titulo.clienteId],
+    queryFn: () => listarContatos(titulo.clienteId ?? ""),
+    enabled: escolhendo && Boolean(titulo.clienteId),
+  });
+
+  function alternar(id: string) {
+    setMarcados((atual) => (atual.includes(id) ? atual.filter((item) => item !== id) : [...atual, id]));
+  }
+
+  return (
+    <Card>
+      <CardContent className="space-y-3 py-4">
+        <div>
+          <h2 className="text-lg font-semibold">Boleto</h2>
+          <p className="text-sm text-muted-foreground">
+            Emitir grava a cobrança na Cora e o PDF neste ERP. Se o título ainda está previsto, ele passa a faturado. Abrir o PDF de novo não consulta a Cora. O e-mail só sai em Enviar boleto.
+          </p>
+        </div>
+        {boleto && (
+          <div className="space-y-2 text-sm">
+            <p>
+              Status <Pill valor={boleto.status} />
+              {boleto.coraStatus ? ` · Cora ${STATUS_CORA[boleto.coraStatus] ?? boleto.coraStatus}` : ""}
+              {boleto.coraId ? ` · Fatura ${boleto.coraId}` : ""}
+            </p>
+            <p>
+              {reais(boleto.valor)} · vencimento {dataBr(boleto.vencimento)}
+            </p>
+            {boleto.linha && (
+              <p className="break-all">
+                <span className="text-muted-foreground">Linha digitável </span>
+                <span className="font-mono">{boleto.linha}</span>
+              </p>
+            )}
+            {boleto.codigoBarras && (
+              <p className="break-all">
+                <span className="text-muted-foreground">Código de barras </span>
+                <span className="font-mono">{boleto.codigoBarras}</span>
+              </p>
+            )}
+            {cora && (
+              <p className="break-all">
+                <span className="text-muted-foreground">PIX copia e cola </span>
+                {boleto.pix ? <span className="font-mono">{boleto.pix}</span> : "A Cora não devolveu o PIX copia e cola."}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          {podeEmitir && (
+            <Button
+              disabled={ocupado}
+              onClick={() => {
+                setOcupado(true);
+                void executar(async () => {
+                  if (alterado) throw new DomainError("Salve o título antes de emitir o boleto.");
+                  const aviso = await emitirBoletoCora(titulo.id);
+                  await onMudou();
+                  return aviso;
+                }, "Boleto emitido e salvo no ERP.").finally(() => setOcupado(false));
+              }}
+            >
+              Emitir boleto
+            </Button>
+          )}
+          {boleto?.temPdf && (
+            <Button
+              variant="outline"
+              disabled={ocupado}
+              onClick={() => {
+                setOcupado(true);
+                void executar(() => abrirPdfBoleto(titulo.id), "PDF do boleto aberto.").finally(() => setOcupado(false));
+              }}
+            >
+              Abrir PDF
+            </Button>
+          )}
+          {boleto?.temPdf && !escolhendo && (
+            <Button variant="outline" disabled={ocupado} onClick={() => setEscolhendo(true)}>
+              Enviar boleto
+            </Button>
+          )}
+        </div>
+        {boleto && !cora && <p className="text-sm text-muted-foreground">O título já tem boleto.</p>}
+        {boleto && !boleto.temPdf && cora && (
+          <p className="text-sm text-muted-foreground">O PDF deste boleto não está no servidor.</p>
+        )}
+        {escolhendo && boleto?.temPdf && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Contatos do cliente</p>
+            <p className="text-sm text-muted-foreground">Os mesmos contatos da NFS-e e da assinatura. Marque quem recebe o PDF.</p>
+            {!titulo.clienteId && <p className="text-sm text-muted-foreground">Este título não tem cliente.</p>}
+            <AvisoConsulta erro={contatos.error} />
+            {contatos.isLoading && <p className="text-sm text-muted-foreground">Carregando contatos…</p>}
+            {titulo.clienteId && !contatos.isLoading && !contatos.error && (contatos.data ?? []).length === 0 && (
+              <p className="text-sm text-muted-foreground">Este cliente ainda não tem contatos. Cadastre nome e e-mail na tela de clientes.</p>
+            )}
+            {(contatos.data ?? []).map((contato) => (
+              <label key={contato.id} className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={marcados.includes(contato.id)} onChange={() => alternar(contato.id)} />
+                {contato.nome} ({contato.email})
+              </label>
+            ))}
+            <Button
+              disabled={ocupado || marcados.length === 0}
+              onClick={() => {
+                setOcupado(true);
+                void executar(async () => {
+                  const aviso = await enviarBoletoCora(titulo.id, marcados);
+                  setEscolhendo(false);
+                  setMarcados([]);
+                  return aviso;
+                }, "Boleto enviado.").finally(() => setOcupado(false));
+              }}
+            >
+              Enviar boleto
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

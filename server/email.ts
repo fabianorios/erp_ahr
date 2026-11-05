@@ -126,7 +126,12 @@ function htmlDe(texto: string): string {
   return `<div style="font-family:sans-serif;font-size:14px;line-height:1.5">${corpo}</div>`;
 }
 
-export async function enviarEmail(input: { para: string; assunto: string; texto: string }): Promise<void> {
+export async function enviarEmail(input: {
+  para: string;
+  assunto: string;
+  texto: string;
+  anexo?: { nome: string; tipo: string; bytes: Buffer };
+}): Promise<void> {
   const config = configGraph();
   const payload = {
     message: {
@@ -134,6 +139,18 @@ export async function enviarEmail(input: { para: string; assunto: string; texto:
       body: { contentType: "HTML", content: htmlDe(input.texto) },
       toRecipients: [{ emailAddress: { address: input.para } }],
       from: { emailAddress: { address: config.fromEmail, name: config.fromName } },
+      ...(input.anexo
+        ? {
+            attachments: [
+              {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                name: input.anexo.nome,
+                contentType: input.anexo.tipo,
+                contentBytes: input.anexo.bytes.toString("base64"),
+              },
+            ],
+          }
+        : {}),
     },
     saveToSentItems: true,
   };
