@@ -219,6 +219,7 @@ export function montarDps(pedido: PedidoNfse): string {
   const id = idDps(pronto.cMunPrestador, pronto.cnpjPrestador, pronto.serie, pronto.numeroDps);
   const doc = pronto.documento.length === 14 ? "CNPJ" : "CPF";
   const complemento = pronto.complemento.trim();
+  const codigoMunicipal = /^\d{3}$/.test(pronto.codigoMunicipal) ? `<cTribMun>${pronto.codigoMunicipal}</cTribMun>` : "";
   return `<?xml version="1.0" encoding="UTF-8"?>` +
     `<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">` +
     `<infDPS Id="${id}">` +
@@ -238,7 +239,7 @@ export function montarDps(pedido: PedidoNfse): string {
     (complemento ? `<xCpl>${xml(complemento)}</xCpl>` : "") +
     `<xBairro>${xml(pronto.bairro.trim())}</xBairro></end></toma>` +
     `<serv><locPrest><cLocPrestacao>${pronto.cMunPrestador}</cLocPrestacao></locPrest>` +
-    `<cServ><cTribNac>${pronto.codigoServico}</cTribNac><cTribMun>${pronto.codigoMunicipal}</cTribMun><xDescServ>${xml(pronto.descricao)}</xDescServ><cNBS>${pronto.cNbs}</cNBS></cServ></serv>` +
+    `<cServ><cTribNac>${pronto.codigoServico}</cTribNac>${codigoMunicipal}<xDescServ>${xml(pronto.descricao)}</xDescServ><cNBS>${pronto.cNbs}</cNBS></cServ></serv>` +
     `<valores><vServPrest><vServ>${pronto.valor}</vServ></vServPrest>` +
     `<trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>1</tpRetISSQN></tribMun>` +
     `<totTrib><pTotTribSN>${pronto.aliquota}</pTotTribSN></totTrib></trib></valores>` +

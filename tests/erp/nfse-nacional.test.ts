@@ -83,7 +83,7 @@ describe("emissão no Emissor Nacional", () => {
     assert.match(xml, /<serie>1<\/serie>/);
     assert.match(xml, /<nDPS>100000000000001<\/nDPS>/);
     assert.match(xml, /<cTribNac>170101<\/cTribNac>/);
-    assert.match(xml, /<cTribMun>3360500<\/cTribMun>/);
+    assert.doesNotMatch(xml, /<cTribMun>/);
     assert.match(xml, /<cNBS>114011900<\/cNBS>/);
     assert.match(xml, /<opSimpNac>3<\/opSimpNac><regApTribSN>1<\/regApTribSN><regEspTrib>0<\/regEspTrib>/);
     assert.match(xml, /<pTotTribSN>2.00<\/pTotTribSN>/);
@@ -97,7 +97,8 @@ describe("emissão no Emissor Nacional", () => {
     assert.match(xml, /<dCompet>2026-11-06<\/dCompet>/);
     assert.match(montarDps(pedido({ numeroDps: "1" })), /<nDPS>1<\/nDPS>/);
     assert.doesNotMatch(montarDps(pedido({ inscricaoMunicipal: "12345678" })), /<IM>/);
-    assert.match(montarDps(pedido({ codigoMunicipal: "336-0500" })), /<cTribMun>3360500<\/cTribMun>/);
+    assert.match(montarDps(pedido({ codigoMunicipal: "020" })), /<cTribMun>020<\/cTribMun>/);
+    assert.doesNotMatch(montarDps(pedido({ codigoMunicipal: "3360500" })), /<cTribMun>/);
     assert.equal(instanteBrasil(new Date("2026-11-06T11:00:00Z")).startsWith("2026-11-06T08:00:00"), true);
     const futuro = montarDps(pedido({ vencimento: "2026-11-02", competencia: "2026-11-02" }));
     assert.match(futuro, /<dCompet>2026-11-06<\/dCompet>/);
