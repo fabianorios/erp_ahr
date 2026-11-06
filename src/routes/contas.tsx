@@ -10,7 +10,7 @@ import { AtalhoConsulta } from "@/components/erp/atalho-consulta";
 import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
-import { atualizarTitulo, buscarPdfNfse, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
+import { abrirPdfBoleto, abrirPdfNfse, atualizarTitulo, buscarPdfNfse, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
 import { reaisToCents } from "@/services/erp/domain";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
@@ -324,6 +324,11 @@ export function ContasPage() {
             <p className="text-sm">Número {editando.nfse.numero}</p>
             <p className="text-sm">Status {editando.nfse.status}</p>
             <p className="text-sm">Emissão {dataBr(editando.nfse.dataEmissao)}</p>
+            {editando.nfse.temPdf && (
+              <Button type="button" variant="outline" onClick={() => executar(() => abrirPdfNfse(editando.id), "PDF da NFS-e aberto.")}>
+                Abrir PDF da NFS-e
+              </Button>
+            )}
             {!editando.nfse.temPdf && (
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">O PDF desta NFS-e não está no servidor.</p>
@@ -344,6 +349,11 @@ export function ContasPage() {
             )}
           </CardContent>
         </Card>
+      )}
+      {editando?.boleto?.temPdf && !canEdit && (
+        <Button type="button" variant="outline" onClick={() => executar(() => abrirPdfBoleto(editando.id), "PDF do boleto aberto.")}>
+          Abrir PDF do boleto
+        </Button>
       )}
       {canEdit && editando && !editando.nfse && !editando.boleto && (
         <Button

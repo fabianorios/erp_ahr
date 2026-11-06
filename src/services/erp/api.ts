@@ -987,8 +987,8 @@ export async function cancelarBoletoCora(tituloId: string): Promise<string | und
   return corpo.aviso;
 }
 
-export async function abrirPdfBoleto(tituloId: string): Promise<void> {
-  const resposta = await comSessao(`/api/titulos/${tituloId}/boleto.pdf`);
+async function abrirPdf(caminho: string): Promise<void> {
+  const resposta = await comSessao(caminho);
   if (!resposta.ok) {
     const corpo = (await resposta.json().catch(() => ({}))) as { message?: string };
     throw new DomainError(corpo.message ?? "Não foi possível abrir o PDF.");
@@ -1004,6 +1004,14 @@ export async function abrirPdfBoleto(tituloId: string): Promise<void> {
     link.click();
   }
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export async function abrirPdfNfse(tituloId: string): Promise<void> {
+  await abrirPdf(`/api/titulos/${tituloId}/nfse.pdf`);
+}
+
+export async function abrirPdfBoleto(tituloId: string): Promise<void> {
+  await abrirPdf(`/api/titulos/${tituloId}/boleto.pdf`);
 }
 
 export async function gravarBoleto(

@@ -115,7 +115,7 @@ export function BoletoTitulo({
                 void executar(() => abrirPdfBoleto(titulo.id), "PDF do boleto aberto.").finally(() => setOcupado(false));
               }}
             >
-              Abrir PDF
+              Abrir PDF do boleto
             </Button>
           )}
           {boleto?.temPdf && envio !== "boleto" && (

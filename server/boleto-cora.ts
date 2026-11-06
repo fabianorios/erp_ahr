@@ -174,6 +174,13 @@ export async function enviarBoletoDoTitulo(db: Banco, tituloId: string, contatoI
   return { aviso: `Boleto enviado para ${ok.join(", ")}.` };
 }
 
+export async function lerPdfNfseDoTitulo(db: Banco, tituloId: string): Promise<Buffer> {
+  if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
+  const nota = await pdfNfseDoTitulo(db, tituloId);
+  if (!nota) throw new DomainError("O PDF desta NFS-e não está no servidor.");
+  return nota.pdf;
+}
+
 export async function situacaoKit(db: Banco, tituloId: string): Promise<{ nfse: boolean; boleto: boolean }> {
   if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
   const [nfse, boleto] = await Promise.all([pdfNfseDoTitulo(db, tituloId), pdfBoletoSalvo(db, tituloId)]);
