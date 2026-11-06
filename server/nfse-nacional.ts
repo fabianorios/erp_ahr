@@ -20,6 +20,7 @@ import {
   type TituloNascido,
 } from "../src/services/erp/nfse-nacional.ts";
 import { diretorioNfse, gravarPdfEm } from "./boleto-cora.ts";
+import { pdfDaNota } from "./danfse-pdf.ts";
 
 type Banco = SupabaseClient;
 
@@ -447,9 +448,11 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
   const xml = assinarDps(montarDps(pedido), prestador.chave, prestador.certificado);
   const enviado = gzipSync(Buffer.from(xml, "utf8")).toString("base64");
   const resposta = await postarSefin(prestador.base, prestador.certificado, prestador.chave, enviado);
-  const id = await aplicarNota(gravador(db), pedido, resposta.status, resposta.texto);
+  const corpo = incorporarXml(resposta.texto);
+  const id = await aplicarNota(gravador(db), pedido, resposta.status, corpo);
   try {
-    await guardarPdf(db, id, prestador.certificado, prestador.chave, pedido.ambiente === 1);
+    const chaveNota = lerNotaAutorizada(resposta.status, corpo, pedido.descricao, pedido.valor).chave;
+    await guardarPdf(db, id, chaveNota, prestador.certificado, prestador.chave, pedido.ambiente === 1, corpo);
   } catch (erro) {
     if (erro instanceof DomainError && /autorizada/.test(erro.message)) throw erro;
     const detalhe = erro instanceof DomainError ? erro.message : "O PDF não foi gravado.";
@@ -496,7 +499,6 @@ export async function gravarPdfDaNota(db: Banco, tituloId: string): Promise<void
   const { data, error } = await db.from("erp_nfse").select("id_externo, pdf_path").eq("conta_receber_id", tituloId).maybeSingle();
   if (error) throw new DomainError("Não foi possível ler a NFS-e.");
   if (!data) throw new DomainError("Este título não tem NFS-e.");
-  if (typeof data.pdf_path === "string" && data.pdf_path.trim()) return;
   const chaveAcesso = typeof data.id_externo === "string" ? data.id_externo : "";
   const conexao = conexaoNfse();
   await guardarPdf(db, tituloId, chaveAcesso, conexao.certificado, conexao.chave, conexao.producao);
@@ -526,10 +528,67 @@ function conexaoNfse(): { certificado: string; chave: string; producao: boolean 
   return { certificado: aberto.certificado, chave: aberto.chave, producao: ambiente.ambiente === 1 };
 }
 
-async function guardarPdf(db: Banco, tituloId: string, chaveAcesso: string, certificado: string, chave: string, producao: boolean): Promise<void> {
+async function guardarPdf(
+  db: Banco,
+  tituloId: string,
+  chaveAcesso: string,
+  certificado: string,
+  chave: string,
+  producao: boolean,
+  corpo?: string,
+): Promise<void> {
   if (!/^\d{50}$/.test(chaveAcesso)) throw new DomainError("A NFS-e não tem chave de acesso.");
-  const pdf = await baixarDanfse(chaveAcesso, certificado, chave, producao);
-  await gravador(db).gravarPdf(tituloId, pdf);
+  const oficial = await pdfOficialDanfse(chaveAcesso, certificado, chave, producao);
+  if (oficial) {
+    await gravador(db).gravarPdf(tituloId, oficial);
+    return;
+  }
+  const xml = xmlNoCorpo(corpo) || (await consultarXmlNfse(chaveAcesso, certificado, chave, producao));
+  await gravador(db).gravarPdf(tituloId, pdfDaNota(null, xml, chaveAcesso));
+}
+
+function xmlNoCorpo(corpo: string | undefined): string {
+  if (!corpo) return "";
+  try {
+    const json = JSON.parse(corpo) as { nfseXml?: unknown };
+    if (typeof json.nfseXml === "string" && /<(?:[\w.-]+:)?infNFSe\b/.test(json.nfseXml)) return json.nfseXml;
+  } catch {
+    if (corpo.includes("<infNFSe")) return corpo;
+  }
+  return "";
+}
+
+async function pdfOficialDanfse(chave: string, certificado: string, chavePrivada: string, producao: boolean): Promise<Buffer | null> {
+  const host = producao ? "https://www.nfse.gov.br" : "https://www.producaorestrita.nfse.gov.br";
+  try {
+    const login = await httpsGet(
+      enderecoLoginDanfse(producao),
+      certificado,
+      chavePrivada,
+      cabecalhosPortal("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+      true,
+    );
+    if (!login.jar.length || login.status === 403) return null;
+    const resposta = await httpsGet(
+      `${host}/EmissorNacional/Notas/Download/DANFSe/${chave}`,
+      certificado,
+      chavePrivada,
+      { ...cabecalhosPortal("application/pdf,*/*"), cookie: login.jar.join("; "), referer: enderecoDanfse(producao, chave) },
+      true,
+    );
+    return pdfDanfse(resposta.corpo);
+  } catch {
+    return null;
+  }
+}
+
+async function consultarXmlNfse(chave: string, certificado: string, chavePrivada: string, producao: boolean): Promise<string> {
+  const base = producao ? "https://sefin.nfse.gov.br/SefinNacional" : "https://sefin.producaorestrita.nfse.gov.br/SefinNacional";
+  const resposta = await httpsGet(`${base}/nfse/${chave}`, certificado, chavePrivada, { accept: "application/json" });
+  if (resposta.status !== 200) throw new DomainError("Não foi possível ler a NFS-e autorizada.");
+  const xml = xmlNoCorpo(incorporarXml(resposta.corpo.toString("utf8")));
+  if (!xml) throw new DomainError("A NFS-e autorizada não trouxe os dados da nota.");
+  return xml;
 }
 
 export function pdfDanfse(corpo: Buffer): Buffer | null {
@@ -599,38 +658,6 @@ export function hrefImpressaoNfse(html: string, base: string): string | null {
     return url.toString();
   }
   return null;
-}
-
-function urlsDanfse(producao: boolean, chave: string): { nota: string; login: string } {
-  return {
-    nota: enderecoDanfse(producao, chave),
-    login: enderecoLoginDanfse(producao),
-  };
-}
-
-async function baixarDanfse(chave: string, certificado: string, chavePrivada: string, producao: boolean): Promise<Buffer> {
-  const urls = urlsDanfse(producao, chave);
-  const login = await httpsGet(urls.login, certificado, chavePrivada, cabecalhosPortal("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"), true);
-  const cookies = login.jar;
-  if (!cookies.length || login.status === 403 || /\/Login/i.test(login.location)) {
-    throw new DomainError(falhaPdfDanfse([{ url: urls.login, status: login.status }]));
-  }
-  const sessao = { ...cabecalhosPortal("text/html,application/xhtml+xml"), cookie: cookies.join("; ") };
-  const nota = await httpsGet(urls.nota, certificado, chavePrivada, sessao);
-  if (nota.status !== 200) throw new DomainError(falhaPdfDanfse([{ url: nota.url, status: nota.status }]));
-  const htmlNota = textoHtml(nota.corpo);
-  if (/type=["']password["']/i.test(htmlNota)) throw new DomainError("A sessão do Emissor Nacional não abriu a nota.");
-  const impressao = hrefImpressaoNfse(htmlNota, nota.url);
-  if (!impressao) throw new DomainError("A página da nota não tem o link de impressão.");
-  const pagina = await httpsGet(impressao, certificado, chavePrivada, { ...sessao, referer: urls.nota });
-  const pronto = pdfDanfse(pagina.corpo);
-  if (pronto) return pronto;
-  if (pagina.status === 200) {
-    const gerado = pdfDaPaginaNfse(textoHtml(pagina.corpo));
-    if (gerado) return gerado;
-    throw new DomainError("A página de impressão da NFS-e não trouxe o conteúdo da nota.");
-  }
-  throw new DomainError(falhaPdfDanfse([{ url: pagina.url, status: pagina.status }]));
 }
 
 export function pdfDaPaginaNfse(html: string): Buffer | null {
