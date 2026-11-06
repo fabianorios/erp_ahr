@@ -578,48 +578,159 @@ export function enderecoLoginDanfse(producao: boolean): string {
 }
 
 export function enderecoDanfse(producao: boolean, chave: string): string {
-  const host = producao ? "https://certificado.nfse.gov.br" : "https://certificado.producaorestrita.nfse.gov.br";
-  return `${host}/EmissorNacional/Notas/Download/DANFSe/${chave}`;
+  const host = producao ? "https://www.nfse.gov.br" : "https://www.producaorestrita.nfse.gov.br";
+  return `${host}/EmissorNacional/Notas/Visualizar/Impressao?chave=${chave}`;
 }
 
-function urlsDanfse(producao: boolean, chave: string): { adn: string; emissor: string; login: string } {
-  const adn = producao ? "https://adn.nfse.gov.br" : "https://adn.producaorestrita.nfse.gov.br";
+function urlsDanfse(producao: boolean, chave: string): { impressao: string; login: string; referer: string } {
+  const host = producao ? "https://www.nfse.gov.br" : "https://www.producaorestrita.nfse.gov.br";
   return {
-    adn: `${adn}/danfse/${chave}`,
-    emissor: enderecoDanfse(producao, chave),
+    impressao: enderecoDanfse(producao, chave),
     login: enderecoLoginDanfse(producao),
+    referer: `${host}/EmissorNacional/Notas/Visualizar/Index/${chave}`,
   };
 }
 
 async function baixarDanfse(chave: string, certificado: string, chavePrivada: string, producao: boolean): Promise<Buffer> {
   const urls = urlsDanfse(producao, chave);
-  const tentativas: { url: string; status: number | "sem resposta" }[] = [];
-  try {
-    const adn = await httpsGet(urls.adn, certificado, chavePrivada, { accept: "application/pdf, application/json" });
-    const pdfAdn = pdfDanfse(adn.corpo);
-    if (pdfAdn) return pdfAdn;
-    tentativas.push({ url: urls.adn, status: adn.status });
-  } catch (erro) {
-    if (erro instanceof DomainError && /grande demais/.test(erro.message)) throw erro;
-    tentativas.push({ url: urls.adn, status: "sem resposta" });
-  }
   const login = await httpsGet(urls.login, certificado, chavePrivada, cabecalhosPortal("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"), true);
   const cookies = login.jar;
   if (!cookies.length || login.status === 403 || /\/Login/i.test(login.location)) {
-    tentativas.push({ url: urls.login, status: login.status });
-    throw new DomainError(falhaPdfDanfse(tentativas));
+    throw new DomainError(falhaPdfDanfse([{ url: urls.login, status: login.status }]));
   }
-  const baixado = await httpsGet(
-    urls.emissor,
-    certificado,
-    chavePrivada,
-    { ...cabecalhosPortal("application/pdf,*/*;q=0.8"), cookie: cookies.join("; ") },
-    true,
-  );
-  const pdf = pdfDanfse(baixado.corpo);
-  if (pdf) return pdf;
-  tentativas.push({ url: baixado.url, status: baixado.status });
-  throw new DomainError(falhaPdfDanfse(tentativas));
+  const pagina = await httpsGet(urls.impressao, certificado, chavePrivada, {
+    ...cabecalhosPortal("text/html,application/xhtml+xml"),
+    cookie: cookies.join("; "),
+    referer: urls.referer,
+  });
+  const pronto = pdfDanfse(pagina.corpo);
+  if (pronto) return pronto;
+  if (pagina.status === 200) {
+    const gerado = pdfDaPaginaNfse(textoHtml(pagina.corpo));
+    if (gerado) return gerado;
+    throw new DomainError("A página de impressão da NFS-e não trouxe o conteúdo da nota.");
+  }
+  throw new DomainError(falhaPdfDanfse([{ url: pagina.url, status: pagina.status }]));
+}
+
+export function pdfDaPaginaNfse(html: string): Buffer | null {
+  const titulo = decodificarHtml(/<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? "");
+  if (!/Emissor Nacional/i.test(titulo)) return null;
+  if (/type=["']password["']/i.test(html) || /Download\/DANFSe/i.test(html) && /403/.test(titulo)) return null;
+  const linhas = linhasDaPagina(html);
+  if (linhas.join(" ").length < 40) return null;
+  return pdfDeTexto([titulo, ...linhas]);
+}
+
+function textoHtml(corpo: Buffer): string {
+  const inicio = corpo.subarray(0, 500).toString("latin1");
+  const charset = /charset=([\w-]+)/i.exec(inicio)?.[1]?.toLowerCase() ?? "utf-8";
+  if (charset.includes("8859") || charset === "latin1") return corpo.toString("latin1");
+  return corpo.toString("utf8");
+}
+
+function linhasDaPagina(html: string): string[] {
+  const semCodigo = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|tr|li|h[1-6]|table|section|header|footer)>/gi, "\n")
+    .replace(/<(td|th)[^>]*>/gi, " ");
+  const texto = decodificarHtml(semCodigo.replace(/<[^>]+>/g, " "));
+  return texto
+    .split(/\n/)
+    .map((linha) => linha.replace(/\s+/g, " ").trim())
+    .filter((linha) => linha.length > 0)
+    .slice(0, 400);
+}
+
+function decodificarHtml(texto: string): string {
+  const nomes: Record<string, string> = {
+    amp: "&", lt: "<", gt: ">", quot: "\"", nbsp: " ",
+    aacute: "á", acirc: "â", atilde: "ã", agrave: "à",
+    eacute: "é", ecirc: "ê", iacute: "í",
+    oacute: "ó", ocirc: "ô", otilde: "õ", uacute: "ú", ccedil: "ç",
+    Aacute: "Á", Atilde: "Ã", Ccedil: "Ç", Eacute: "É", Oacute: "Ó",
+  };
+  return texto
+    .replace(/&#(\d+);/g, (_, numero: string) => String.fromCodePoint(Number(numero)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, numero: string) => String.fromCodePoint(parseInt(numero, 16)))
+    .replace(/&([a-z]+);/gi, (todo, nome: string) => nomes[nome] ?? nomes[nome.toLowerCase()] ?? todo);
+}
+
+function pdfDeTexto(linhas: string[]): Buffer {
+  const quebradas = linhas.flatMap((linha) => quebrarLinha(linha, 95));
+  const paginas: string[][] = [];
+  for (let i = 0; i < quebradas.length; i += 56) paginas.push(quebradas.slice(i, i + 56));
+  if (!paginas.length) paginas.push([""]);
+  const fontId = 3 + paginas.length * 2;
+  const objetos = new Array<string>(2 + paginas.length * 2 + 1);
+  const kids: number[] = [];
+  paginas.forEach((linhasPagina, indice) => {
+    const pageId = 3 + indice * 2;
+    const contId = pageId + 1;
+    kids.push(pageId);
+    const conteudo = conteudoPagina(linhasPagina);
+    objetos[pageId - 1] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents ${contId} 0 R /Resources << /Font << /F1 ${fontId} 0 R >> >> >>`;
+    objetos[contId - 1] = `<< /Length ${Buffer.byteLength(conteudo, "latin1")} >>\nstream\n${conteudo}\nendstream`;
+  });
+  objetos[0] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objetos[1] = `<< /Type /Pages /Count ${paginas.length} /Kids [${kids.map((id) => `${id} 0 R`).join(" ")}] >>`;
+  objetos[fontId - 1] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objetos.forEach((objeto, indice) => {
+    offsets.push(Buffer.byteLength(pdf, "latin1"));
+    pdf += `${indice + 1} 0 obj\n${objeto}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(pdf, "latin1");
+  pdf += `xref\n0 ${objetos.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (let i = 1; i < offsets.length; i += 1) pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objetos.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf, "latin1");
+}
+
+function quebrarLinha(linha: string, limite: number): string[] {
+  const saida: string[] = [];
+  let resto = linha;
+  while (resto.length > limite) {
+    let corte = resto.lastIndexOf(" ", limite);
+    if (corte < 20) corte = limite;
+    saida.push(resto.slice(0, corte).trimEnd());
+    resto = resto.slice(corte).trimStart();
+  }
+  if (resto) saida.push(resto);
+  return saida;
+}
+
+function conteudoPagina(linhas: string[]): string {
+  const comandos = ["BT", "/F1 9 Tf", "40 800 Td", "12 TL"];
+  linhas.forEach((linha, indice) => {
+    if (indice > 0) comandos.push("T*");
+    comandos.push(`${literalPdf(linha)} Tj`);
+  });
+  comandos.push("ET");
+  return comandos.join("\n");
+}
+
+function literalPdf(texto: string): string {
+  let saida = "";
+  for (const caractere of texto) {
+    const byte = byteWinAnsi(caractere);
+    if (byte === 0x28 || byte === 0x29 || byte === 0x5c) saida += `\\${String.fromCharCode(byte)}`;
+    else if (byte < 32 || byte > 126) saida += `\\${byte.toString(8).padStart(3, "0")}`;
+    else saida += String.fromCharCode(byte);
+  }
+  return `(${saida})`;
+}
+
+function byteWinAnsi(caractere: string): number {
+  const codigo = caractere.codePointAt(0) ?? 0x3f;
+  if (codigo === 0x20ac) return 0x80;
+  if (codigo >= 32 && codigo <= 126) return codigo;
+  if (codigo >= 160 && codigo <= 255) return codigo;
+  return 0x3f;
 }
 
 function postarSefin(base: string, certificado: string, chave: string, dpsXmlGZipB64: string): Promise<{ status: number; texto: string }> {

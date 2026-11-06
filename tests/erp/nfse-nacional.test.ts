@@ -19,7 +19,7 @@ import {
   validarBaseSefin,
   type PedidoNfse,
 } from "../../src/services/erp/nfse-nacional.ts";
-import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, deveSeguirRedirecionamentoDanfse, enderecoDanfse, enderecoLoginDanfse, falhaPdfDanfse, incorporarXml, pdfDanfse } from "../../server/nfse-nacional.ts";
+import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, deveSeguirRedirecionamentoDanfse, enderecoDanfse, enderecoLoginDanfse, falhaPdfDanfse, incorporarXml, pdfDaPaginaNfse, pdfDanfse } from "../../server/nfse-nacional.ts";
 
 const CLIENTE = "11111111-1111-4111-8111-111111111111";
 const CENTRO = "22222222-2222-4222-8222-222222222222";
@@ -216,8 +216,9 @@ describe("emissão no Emissor Nacional", () => {
       assert.equal(enderecoLoginDanfse(true), "https://certificado.nfse.gov.br/EmissorNacional/Certificado");
       assert.equal(enderecoLoginDanfse(false), "https://certificado.producaorestrita.nfse.gov.br/EmissorNacional/Certificado");
       const chaveNota = "2".repeat(50);
-      assert.equal(enderecoDanfse(true, chaveNota), `https://certificado.nfse.gov.br/EmissorNacional/Notas/Download/DANFSe/${chaveNota}`);
-      assert.equal(enderecoDanfse(false, chaveNota), `https://certificado.producaorestrita.nfse.gov.br/EmissorNacional/Notas/Download/DANFSe/${chaveNota}`);
+      assert.equal(enderecoDanfse(true, chaveNota), `https://www.nfse.gov.br/EmissorNacional/Notas/Visualizar/Impressao?chave=${chaveNota}`);
+      assert.equal(enderecoDanfse(false, chaveNota), `https://www.producaorestrita.nfse.gov.br/EmissorNacional/Notas/Visualizar/Impressao?chave=${chaveNota}`);
+      assert.equal(enderecoDanfse(true, chaveNota).includes("Download/DANFSe"), false);
       const origem = enderecoDanfse(true, chaveNota);
       assert.equal(deveSeguirRedirecionamentoDanfse(301, `https://www.nfse.gov.br/EmissorNacional/Notas/Download/DANFSe/${chaveNota}`, origem), true);
       assert.equal(deveSeguirRedirecionamentoDanfse(302, "https://www.nfse.gov.br/EmissorNacional/Login", "https://certificado.nfse.gov.br/EmissorNacional/Certificado"), false);
@@ -242,6 +243,16 @@ describe("emissão no Emissor Nacional", () => {
     assert.equal(mensagem.includes(chave), false);
     assert.equal(mensagem.includes("senha-super-secreta"), false);
     assert.equal(mensagem.includes("BEGIN"), false);
+    const html = `<html><head><title>NFS-e | Emissor Nacional</title></head><body><table><tr><td>Prestador</td><td>AHR Consultoria</td></tr><tr><td>Servi&ccedil;o</td><td>S&atilde;o Caetano</td></tr><tr><td>Valor</td><td>R$ 169,00</td></tr></table></body></html>`;
+    const pdf = pdfDaPaginaNfse(html);
+    assert.ok(pdf);
+    assert.equal(pdf.subarray(0, 5).toString("utf8"), "%PDF-");
+    const texto = pdf.toString("latin1");
+    assert.match(texto, /AHR Consultoria/);
+    assert.match(texto, /S\\343o Caetano/);
+    assert.match(texto, /169,00/);
+    assert.equal(pdfDaPaginaNfse("<html><head><title>NFS-e | Portal Contribuinte</title></head><body><input type=\"password\"></body></html>"), null);
+    assert.equal(pdfDaPaginaNfse(""), null);
   });
 
   it("assina a DPS sem enviar", () => {
