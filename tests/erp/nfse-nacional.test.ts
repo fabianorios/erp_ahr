@@ -19,7 +19,7 @@ import {
   validarBaseSefin,
   type PedidoNfse,
 } from "../../src/services/erp/nfse-nacional.ts";
-import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, incorporarXml } from "../../server/nfse-nacional.ts";
+import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, falhaPdfDanfse, incorporarXml, pdfDanfse } from "../../server/nfse-nacional.ts";
 
 const CLIENTE = "11111111-1111-4111-8111-111111111111";
 const CENTRO = "22222222-2222-4222-8222-222222222222";
@@ -196,6 +196,24 @@ describe("emissão no Emissor Nacional", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("reconhece o PDF cru ou em base64 e descreve a falha sem a chave", () => {
+    const cru = Buffer.from("%PDF-1.4\n%teste\n");
+    assert.equal(pdfDanfse(cru)?.toString("utf8"), cru.toString("utf8"));
+    const embrulhado = Buffer.from(JSON.stringify({ arquivo: { conteudo: cru.toString("base64") } }));
+    assert.equal(pdfDanfse(embrulhado)?.subarray(0, 5).toString("utf8"), "%PDF-");
+    assert.equal(pdfDanfse(Buffer.from("<html>senha-super-secreta</html>")), null);
+    assert.deepEqual(cookiesSessao(["ASP.NET_SessionId=abc; path=/; HttpOnly", "ARRAffinity=zzz; Path=/"]), ["ASP.NET_SessionId=abc", "ARRAffinity=zzz"]);
+    const chave = "1".repeat(50);
+    const mensagem = falhaPdfDanfse([
+      { url: `https://adn.nfse.gov.br/danfse/${chave}`, status: 404 },
+      { url: `https://www.nfse.gov.br/EmissorNacional/Notas/Download/DANFSe/${chave}`, status: 200 },
+    ]);
+    assert.equal(mensagem, "O PDF da NFS-e não foi obtido (adn.nfse.gov.br/danfse HTTP 404; www.nfse.gov.br/EmissorNacional/Notas/Download/DANFSe HTTP 200).");
+    assert.equal(mensagem.includes(chave), false);
+    assert.equal(mensagem.includes("senha-super-secreta"), false);
+    assert.equal(mensagem.includes("BEGIN"), false);
   });
 
   it("assina a DPS sem enviar", () => {

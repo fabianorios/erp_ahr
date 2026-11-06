@@ -10,7 +10,7 @@ import { AtalhoConsulta } from "@/components/erp/atalho-consulta";
 import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
-import { atualizarTitulo, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
+import { atualizarTitulo, buscarPdfNfse, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
 import { reaisToCents } from "@/services/erp/domain";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
@@ -325,7 +325,22 @@ export function ContasPage() {
             <p className="text-sm">Status {editando.nfse.status}</p>
             <p className="text-sm">Emissão {dataBr(editando.nfse.dataEmissao)}</p>
             {!editando.nfse.temPdf && (
-              <p className="text-sm text-muted-foreground">O PDF desta NFS-e não está no servidor.</p>
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">O PDF desta NFS-e não está no servidor.</p>
+                {canEdit && (
+                  <Button
+                    type="button"
+                    onClick={() =>
+                      executar(async () => {
+                        await buscarPdfNfse(editando.id);
+                        await recarregar();
+                      }, "PDF da NFS-e gravado")
+                    }
+                  >
+                    Buscar PDF
+                  </Button>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

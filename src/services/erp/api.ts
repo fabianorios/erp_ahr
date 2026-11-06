@@ -926,6 +926,10 @@ export async function gravarNfse(
   await escrever("nfse.salvar", { tituloId: titulo.id, ...input });
 }
 
+export async function buscarPdfNfse(tituloId: string): Promise<void> {
+  await escrever("nfse.pdf", { tituloId });
+}
+
 export async function emitirNfNacional(input: {
   clienteId: string;
   descricao: string;

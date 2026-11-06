@@ -410,7 +410,13 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
   const enviado = gzipSync(Buffer.from(xml, "utf8")).toString("base64");
   const resposta = await postarSefin(prestador.base, prestador.certificado, prestador.chave, enviado);
   const id = await aplicarNota(gravador(db), pedido, resposta.status, resposta.texto);
-  await guardarPdf(db, id, prestador, pedido.ambiente === 1).catch(() => undefined);
+  try {
+    await guardarPdf(db, id, prestador.certificado, prestador.chave, pedido.ambiente === 1);
+  } catch (erro) {
+    if (erro instanceof DomainError && /autorizada/.test(erro.message)) throw erro;
+    const detalhe = erro instanceof DomainError ? erro.message : "O PDF não foi gravado.";
+    throw new DomainError(`A nota foi autorizada e o título foi aberto. ${detalhe}`);
+  }
   return { id };
 }
 
@@ -448,13 +454,111 @@ function gravador(db: Banco): GravadorNfse {
   };
 }
 
-async function guardarPdf(db: Banco, tituloId: string, prestador: { certificado: string; chave: string }, producao: boolean): Promise<void> {
-  const { data } = await db.from("erp_nfse").select("id_externo").eq("conta_receber_id", tituloId).maybeSingle();
-  const chaveAcesso = typeof data?.id_externo === "string" ? data.id_externo : "";
-  if (!/^\d{50}$/.test(chaveAcesso)) return;
-  const host = producao ? "https://adn.nfse.gov.br" : "https://adn.producaorestrita.nfse.gov.br";
-  const pdf = await baixarPdf(`${host}/danfse/${chaveAcesso}`, prestador.certificado, prestador.chave);
+export async function gravarPdfDaNota(db: Banco, tituloId: string): Promise<void> {
+  const { data, error } = await db.from("erp_nfse").select("id_externo, pdf_path").eq("conta_receber_id", tituloId).maybeSingle();
+  if (error) throw new DomainError("Não foi possível ler a NFS-e.");
+  if (!data) throw new DomainError("Este título não tem NFS-e.");
+  if (typeof data.pdf_path === "string" && data.pdf_path.trim()) return;
+  const chaveAcesso = typeof data.id_externo === "string" ? data.id_externo : "";
+  const conexao = conexaoNfse();
+  await guardarPdf(db, tituloId, chaveAcesso, conexao.certificado, conexao.chave, conexao.producao);
+}
+
+function conexaoNfse(): { certificado: string; chave: string; producao: boolean } {
+  const ambiente = ambienteNfse(process.env.NFSE_AMBIENTE ?? "");
+  const { caminho, senha } = certificadoDaEmissao();
+  if (!caminho || !senha.trim()) throw new DomainError("O certificado A1 da NFS-e não está configurado no servidor.");
+  let pfx: Buffer;
+  try {
+    pfx = readFileSync(caminho);
+  } catch {
+    throw new DomainError("O certificado A1 da NFS-e não está no servidor.");
+  }
+  const aberto = abrirPfx(pfx, senha, caminho);
+  return { certificado: aberto.certificado, chave: aberto.chave, producao: ambiente.ambiente === 1 };
+}
+
+async function guardarPdf(db: Banco, tituloId: string, chaveAcesso: string, certificado: string, chave: string, producao: boolean): Promise<void> {
+  if (!/^\d{50}$/.test(chaveAcesso)) throw new DomainError("A NFS-e não tem chave de acesso.");
+  const pdf = await baixarDanfse(chaveAcesso, certificado, chave, producao);
   await gravador(db).gravarPdf(tituloId, pdf);
+}
+
+export function pdfDanfse(corpo: Buffer): Buffer | null {
+  if (corpo.subarray(0, 5).toString("utf8") === "%PDF-") return corpo;
+  try {
+    const achado = pdfNoJson(JSON.parse(corpo.toString("utf8")) as unknown);
+    if (achado) return achado;
+  } catch {
+    /* o corpo não era JSON */
+  }
+  return null;
+}
+
+function pdfNoJson(valor: unknown): Buffer | null {
+  if (typeof valor === "string" && valor.length >= 20) {
+    const binario = Buffer.from(valor, "base64");
+    if (binario.subarray(0, 5).toString("utf8") === "%PDF-") return binario;
+  }
+  if (!valor || typeof valor !== "object") return null;
+  for (const item of Object.values(valor as Record<string, unknown>)) {
+    const achado = pdfNoJson(item);
+    if (achado) return achado;
+  }
+  return null;
+}
+
+export function cookiesSessao(setCookie: string | string[] | undefined): string[] {
+  const lista = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+  return lista.map((item) => item.split(";", 1)[0]?.trim() ?? "").filter((item) => item.includes("="));
+}
+
+export function falhaPdfDanfse(tentativas: { url: string; status: number | "sem resposta" }[]): string {
+  const partes = tentativas.map((tentativa) => `${rotuloDanfse(tentativa.url)} HTTP ${tentativa.status}`);
+  return `O PDF da NFS-e não foi obtido (${partes.join("; ")}).`;
+}
+
+function rotuloDanfse(url: string): string {
+  const alvo = new URL(url);
+  return `${alvo.host}${alvo.pathname.replace(/\/\d{50}(?=$)/, "")}`;
+}
+
+function urlsDanfse(producao: boolean, chave: string): { adn: string; emissor: string; login: string } {
+  if (producao) {
+    const emissor = "https://www.nfse.gov.br/EmissorNacional";
+    return { adn: `https://adn.nfse.gov.br/danfse/${chave}`, emissor: `${emissor}/Notas/Download/DANFSe/${chave}`, login: `${emissor}/Certificado` };
+  }
+  const emissor = "https://www.producaorestrita.nfse.gov.br/EmissorNacional";
+  return {
+    adn: `https://adn.producaorestrita.nfse.gov.br/danfse/${chave}`,
+    emissor: `${emissor}/Notas/Download/DANFSe/${chave}`,
+    login: `${emissor}/Certificado`,
+  };
+}
+
+async function baixarDanfse(chave: string, certificado: string, chavePrivada: string, producao: boolean): Promise<Buffer> {
+  const urls = urlsDanfse(producao, chave);
+  const tentativas: { url: string; status: number | "sem resposta" }[] = [];
+  try {
+    const adn = await httpsGet(urls.adn, certificado, chavePrivada, { accept: "application/pdf, application/json" });
+    const pdfAdn = pdfDanfse(adn.corpo);
+    if (pdfAdn) return pdfAdn;
+    tentativas.push({ url: urls.adn, status: adn.status });
+  } catch (erro) {
+    if (erro instanceof DomainError && /grande demais/.test(erro.message)) throw erro;
+    tentativas.push({ url: urls.adn, status: "sem resposta" });
+  }
+  const login = await httpsGet(urls.login, certificado, chavePrivada, { accept: "text/html,application/xhtml+xml" });
+  const cookies = cookiesSessao(login.cookies);
+  if (!cookies.length) {
+    tentativas.push({ url: urls.login, status: login.status });
+    throw new DomainError(falhaPdfDanfse(tentativas));
+  }
+  const baixado = await httpsGet(urls.emissor, certificado, chavePrivada, { accept: "application/pdf", cookie: cookies.join("; ") }, true);
+  const pdf = pdfDanfse(baixado.corpo);
+  if (pdf) return pdf;
+  tentativas.push({ url: urls.emissor, status: baixado.status });
+  throw new DomainError(falhaPdfDanfse(tentativas));
 }
 
 function postarSefin(base: string, certificado: string, chave: string, dpsXmlGZipB64: string): Promise<{ status: number; texto: string }> {
@@ -469,9 +573,18 @@ function postarSefin(base: string, certificado: string, chave: string, dpsXmlGZi
   });
 }
 
-function baixarPdf(url: string, certificado: string, chave: string): Promise<Uint8Array> {
+type RespostaHttp = { status: number; corpo: Buffer; cookies: string[]; location: string };
+
+function httpsGet(
+  url: string,
+  certificado: string,
+  chave: string,
+  headers: Record<string, string>,
+  seguir = false,
+  saltos = 0,
+): Promise<RespostaHttp> {
+  const alvo = new URL(url);
   return new Promise((resolve, reject) => {
-    const alvo = new URL(url);
     const req = httpsRequest(
       {
         protocol: alvo.protocol,
@@ -480,19 +593,35 @@ function baixarPdf(url: string, certificado: string, chave: string): Promise<Uin
         method: "GET",
         cert: certificado,
         key: chave,
-        headers: { accept: "application/pdf" },
+        headers,
         timeout: 20_000,
       },
       (res) => {
         const partes: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => partes.push(chunk));
-        res.on("end", () => {
-          const bytes = Buffer.concat(partes);
-          if ((res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300 && bytes.subarray(0, 4).toString() === "%PDF") {
-            resolve(bytes);
+        let tamanho = 0;
+        res.on("data", (chunk: Buffer) => {
+          tamanho += chunk.length;
+          if (tamanho > 8_000_000) {
+            req.destroy();
+            reject(new DomainError("O Emissor Nacional devolveu uma resposta grande demais."));
             return;
           }
-          reject(new DomainError("O Emissor Nacional não devolveu o PDF da nota."));
+          partes.push(chunk);
+        });
+        res.on("end", () => {
+          const cookies = cookiesSessao(res.headers["set-cookie"]);
+          const location = typeof res.headers.location === "string" ? res.headers.location : "";
+          const status = res.statusCode ?? 0;
+          const corpo = Buffer.concat(partes);
+          if (seguir && saltos < 2 && status >= 300 && status < 400 && location && !/\/Login/i.test(location)) {
+            const proxima = new URL(location, url);
+            if (proxima.protocol === "https:" && proxima.hostname.endsWith("nfse.gov.br")) {
+              const jar = [...(headers.cookie ? headers.cookie.split(";").map((item) => item.trim()).filter(Boolean) : []), ...cookies];
+              resolve(httpsGet(proxima.toString(), certificado, chave, { ...headers, cookie: jar.join("; ") }, true, saltos + 1));
+              return;
+            }
+          }
+          resolve({ status, corpo, cookies, location });
         });
       },
     );
