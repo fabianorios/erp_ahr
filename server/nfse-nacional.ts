@@ -134,9 +134,26 @@ const IGNORAR_GESTAO = new Set(["node_modules", "vendor", ".git", "storage", "di
 /** Lê o PFX já configurado no Gestão. Não registra senha nem certificado. */
 export function certificadoDaGestao(raiz = RAIZ_GESTAO): { caminho: string; senha: string } | null {
   if (!existsSync(raiz)) return null;
+  const esocial = certificadoEsocial(raiz);
+  if (esocial) return esocial;
   const textos: string[] = [];
   coletarEnv(raiz, 0, textos);
   return escolherCertificado(textos.flatMap(parseEnv));
+}
+
+function certificadoEsocial(raiz: string): { caminho: string; senha: string } | null {
+  const caminho = join(raiz, "secrets", "esocial.pfx");
+  const envPath = join(raiz, "secrets", "esocial.env");
+  if (!existsSync(caminho) || !existsSync(envPath)) return null;
+  let texto = "";
+  try {
+    texto = readFileSync(envPath, "utf8");
+  } catch {
+    return null;
+  }
+  const senha = parseEnv(texto).find((item) => item.chave.toUpperCase() === "ESOCIAL_CERT_PASSWORD")?.valor ?? "";
+  if (!senha.trim()) return null;
+  return { caminho, senha };
 }
 
 function coletarEnv(dir: string, profundidade: number, textos: string[]): void {
@@ -160,7 +177,7 @@ function coletarEnv(dir: string, profundidade: number, textos: string[]): void {
       coletarEnv(caminho, profundidade + 1, textos);
       continue;
     }
-    if (nome !== ".env" && !nome.startsWith(".env.")) continue;
+    if (nome !== ".env" && !nome.startsWith(".env.") && !nome.endsWith(".env")) continue;
     if (info.size > 200_000) continue;
     try {
       textos.push(readFileSync(caminho, "utf8"));
@@ -186,6 +203,13 @@ function parseEnv(texto: string): { chave: string; valor: string }[] {
 
 function escolherCertificado(entradas: { chave: string; valor: string }[]): { caminho: string; senha: string } | null {
   const pfxs = entradas.filter((item) => /\.(pfx|p12)$/i.test(item.valor.trim()));
+  const esocial = pfxs.find((item) => /esocial\.pfx$/i.test(item.valor.trim()) || item.chave.toUpperCase().includes("ESOCIAL"));
+  if (esocial) {
+    const senha = senhaDoPar(entradas, esocial.chave)
+      ?? entradas.find((item) => item.chave.toUpperCase() === "ESOCIAL_CERT_PASSWORD" && item.valor)?.valor
+      ?? null;
+    if (senha) return { caminho: esocial.valor.trim(), senha };
+  }
   const ordenados = [...pfxs].sort((a, b) => pontuarChave(b.chave) - pontuarChave(a.chave));
   for (const item of ordenados) {
     const senha = senhaDoPar(entradas, item.chave);
@@ -273,10 +297,24 @@ function opensslPkcs12(caminho: string, senha: string, extra: string[]): string 
   return resultado.stdout ?? "";
 }
 
+function pemTodos(texto: string, rotulo: string): string {
+  const inicio = `-----BEGIN ${rotulo}-----`;
+  const fim = `-----END ${rotulo}-----`;
+  const partes: string[] = [];
+  let de = texto.indexOf(inicio);
+  while (de >= 0) {
+    const ate = texto.indexOf(fim, de);
+    if (ate < 0) break;
+    partes.push(`${texto.slice(de, ate + fim.length)}\n`);
+    de = texto.indexOf(inicio, ate + fim.length);
+  }
+  return partes.join("");
+}
+
 function abrirComOpenssl(caminho: string, senha: string): CertificadoA1 {
   const chave = pemDe(opensslPkcs12(caminho, senha, ["-nocerts", "-noenc"]), "PRIVATE KEY")
     || pemDe(opensslPkcs12(caminho, senha, ["-nocerts", "-noenc"]), "RSA PRIVATE KEY");
-  const certificado = pemDe(opensslPkcs12(caminho, senha, ["-clcerts", "-nokeys"]), "CERTIFICATE");
+  const certificado = pemTodos(opensslPkcs12(caminho, senha, ["-nokeys"]), "CERTIFICATE");
   if (!chave || !certificado) throw falhaCertificado();
   return { chave, certificado };
 }
@@ -474,7 +512,17 @@ function conexaoNfse(): { certificado: string; chave: string; producao: boolean 
   } catch {
     throw new DomainError("O certificado A1 da NFS-e não está no servidor.");
   }
-  const aberto = abrirPfx(pfx, senha, caminho);
+  let aberto: CertificadoA1;
+  try {
+    aberto = abrirComOpenssl(caminho, senha);
+  } catch (erro) {
+    if (!(erro instanceof DomainError)) throw falhaCertificado();
+    try {
+      aberto = abrirComForge(pfx, senha);
+    } catch {
+      throw erro;
+    }
+  }
   return { certificado: aberto.certificado, chave: aberto.chave, producao: ambiente.ambiente === 1 };
 }
 
@@ -523,16 +571,19 @@ function rotuloDanfse(url: string): string {
   return `${alvo.host}${alvo.pathname.replace(/\/\d{50}(?=$)/, "")}`;
 }
 
+export function enderecoLoginDanfse(producao: boolean): string {
+  return producao
+    ? "https://certificado.nfse.gov.br/EmissorNacional/Certificado"
+    : "https://certificado.producaorestrita.nfse.gov.br/EmissorNacional/Certificado";
+}
+
 function urlsDanfse(producao: boolean, chave: string): { adn: string; emissor: string; login: string } {
-  if (producao) {
-    const emissor = "https://www.nfse.gov.br/EmissorNacional";
-    return { adn: `https://adn.nfse.gov.br/danfse/${chave}`, emissor: `${emissor}/Notas/Download/DANFSe/${chave}`, login: `${emissor}/Certificado` };
-  }
-  const emissor = "https://www.producaorestrita.nfse.gov.br/EmissorNacional";
+  const portal = producao ? "https://www.nfse.gov.br" : "https://www.producaorestrita.nfse.gov.br";
+  const adn = producao ? "https://adn.nfse.gov.br" : "https://adn.producaorestrita.nfse.gov.br";
   return {
-    adn: `https://adn.producaorestrita.nfse.gov.br/danfse/${chave}`,
-    emissor: `${emissor}/Notas/Download/DANFSe/${chave}`,
-    login: `${emissor}/Certificado`,
+    adn: `${adn}/danfse/${chave}`,
+    emissor: `${portal}/EmissorNacional/Notas/Download/DANFSe/${chave}`,
+    login: enderecoLoginDanfse(producao),
   };
 }
 
@@ -548,13 +599,19 @@ async function baixarDanfse(chave: string, certificado: string, chavePrivada: st
     if (erro instanceof DomainError && /grande demais/.test(erro.message)) throw erro;
     tentativas.push({ url: urls.adn, status: "sem resposta" });
   }
-  const login = await httpsGet(urls.login, certificado, chavePrivada, { accept: "text/html,application/xhtml+xml" });
-  const cookies = cookiesSessao(login.cookies);
-  if (!cookies.length) {
+  const login = await httpsGet(urls.login, certificado, chavePrivada, cabecalhosPortal("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"), true);
+  const cookies = login.jar;
+  if (!cookies.length || login.status === 403 || /\/Login/i.test(login.location)) {
     tentativas.push({ url: urls.login, status: login.status });
     throw new DomainError(falhaPdfDanfse(tentativas));
   }
-  const baixado = await httpsGet(urls.emissor, certificado, chavePrivada, { accept: "application/pdf", cookie: cookies.join("; ") }, true);
+  const baixado = await httpsGet(
+    urls.emissor,
+    certificado,
+    chavePrivada,
+    { ...cabecalhosPortal("application/pdf,*/*;q=0.8"), cookie: cookies.join("; ") },
+    true,
+  );
   const pdf = pdfDanfse(baixado.corpo);
   if (pdf) return pdf;
   tentativas.push({ url: urls.emissor, status: baixado.status });
@@ -573,7 +630,22 @@ function postarSefin(base: string, certificado: string, chave: string, dpsXmlGZi
   });
 }
 
-type RespostaHttp = { status: number; corpo: Buffer; cookies: string[]; location: string };
+type RespostaHttp = { status: number; corpo: Buffer; cookies: string[]; location: string; jar: string[] };
+
+function cabecalhosPortal(accept: string): Record<string, string> {
+  return {
+    accept,
+    "user-agent": "Mozilla/5.0",
+    "accept-language": "pt-BR,pt;q=0.9",
+  };
+}
+
+function juntarCookies(cookieHeader: string | undefined, novos: string[]): string[] {
+  const atuais = cookieHeader ? cookieHeader.split(";").map((item) => item.trim()).filter((item) => item.includes("=")) : [];
+  const mapa = new Map<string, string>();
+  for (const item of [...atuais, ...novos]) mapa.set(item.split("=", 1)[0] ?? item, item);
+  return [...mapa.values()];
+}
 
 function httpsGet(
   url: string,
@@ -613,15 +685,15 @@ function httpsGet(
           const location = typeof res.headers.location === "string" ? res.headers.location : "";
           const status = res.statusCode ?? 0;
           const corpo = Buffer.concat(partes);
-          if (seguir && saltos < 2 && status >= 300 && status < 400 && location && !/\/Login/i.test(location)) {
+          const jar = juntarCookies(headers.cookie, cookies);
+          if (seguir && saltos < 5 && status >= 300 && status < 400 && location && !/\/Login/i.test(location)) {
             const proxima = new URL(location, url);
             if (proxima.protocol === "https:" && proxima.hostname.endsWith("nfse.gov.br")) {
-              const jar = [...(headers.cookie ? headers.cookie.split(";").map((item) => item.trim()).filter(Boolean) : []), ...cookies];
               resolve(httpsGet(proxima.toString(), certificado, chave, { ...headers, cookie: jar.join("; ") }, true, saltos + 1));
               return;
             }
           }
-          resolve({ status, corpo, cookies, location });
+          resolve({ status, corpo, cookies, location, jar });
         });
       },
     );

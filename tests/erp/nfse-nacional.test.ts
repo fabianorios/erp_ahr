@@ -19,7 +19,7 @@ import {
   validarBaseSefin,
   type PedidoNfse,
 } from "../../src/services/erp/nfse-nacional.ts";
-import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, falhaPdfDanfse, incorporarXml, pdfDanfse } from "../../server/nfse-nacional.ts";
+import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, enderecoLoginDanfse, falhaPdfDanfse, incorporarXml, pdfDanfse } from "../../server/nfse-nacional.ts";
 
 const CLIENTE = "11111111-1111-4111-8111-111111111111";
 const CENTRO = "22222222-2222-4222-8222-222222222222";
@@ -193,6 +193,28 @@ describe("emissão no Emissor Nacional", () => {
       assert.match(aberto.chave, /BEGIN (RSA )?PRIVATE KEY/);
       assert.match(aberto.certificado, /BEGIN CERTIFICATE/);
       assert.throws(() => abrirPfx(Buffer.from("nao-e-pfx"), `${senha}-errada`, pfx), (error: unknown) => error instanceof DomainError && !String(error.message).includes(senha));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefere o esocial.pfx do Gestão e entra no host do certificado", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gestao-esocial-"));
+    const senha = "senha-esocial-teste";
+    try {
+      mkdirSync(join(dir, "secrets"));
+      const pfx = join(dir, "secrets", "esocial.pfx");
+      writeFileSync(pfx, "pfx");
+      writeFileSync(join(dir, "secrets", "esocial.env"), `ESOCIAL_CERT_PASSWORD=${senha}\n`);
+      writeFileSync(join(dir, ".env"), "NFSE_CERT_PATH=/tmp/erpahr.pfx\nNFSE_CERT_PASSWORD=outra-senha\n");
+      const achado = certificadoDaGestao(dir);
+      assert.equal(achado?.caminho, pfx);
+      assert.equal(achado?.senha, senha);
+      const emissao = certificadoDaEmissao(dir, { NFSE_CERT_PATH: "/tmp/erpahr.pfx", NFSE_CERT_PASSWORD: "outra-senha" });
+      assert.equal(emissao.caminho, pfx);
+      assert.equal(emissao.senha, senha);
+      assert.equal(enderecoLoginDanfse(true), "https://certificado.nfse.gov.br/EmissorNacional/Certificado");
+      assert.equal(enderecoLoginDanfse(false), "https://certificado.producaorestrita.nfse.gov.br/EmissorNacional/Certificado");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
