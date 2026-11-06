@@ -48,6 +48,7 @@ import {
 } from "../src/services/erp/domain.ts";
 import { validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
 import { alterarVencimentoDoTitulo, cancelarBoletoDoTitulo, emitirBoletoDoTitulo, enviarBoletoDoTitulo, enviarKitDoTitulo, situacaoKit } from "./boleto-cora.ts";
+import { emitirNfseECriarTitulo } from "./nfse-nacional.ts";
 
 type Banco = SupabaseClient;
 
@@ -193,6 +194,8 @@ export async function executarGravacao(
       return salvarNfse(db, dados);
     case "nfse.anular":
       return anularNfse(db, dados);
+    case "nfse.emitir":
+      return emitirNfseECriarTitulo(db, dados);
     case "boleto.salvar":
       return salvarBoleto(db, dados);
     case "boleto.status":

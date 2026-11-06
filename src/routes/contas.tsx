@@ -5,13 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AvisoConsulta, Campo, CampoDinheiro, TituloPagina, executar, hoje, reaisInput } from "@/components/erp/apresentacao";
+import { AvisoConsulta, Campo, CampoDinheiro, TituloPagina, executar, reaisInput } from "@/components/erp/apresentacao";
 import { AtalhoConsulta } from "@/components/erp/atalho-consulta";
 import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
-import { anularNfse, atualizarTitulo, criarTituloAvulso, excluirTitulo, gravarNfse, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
-import { MUNICIPIO_NFSE, reaisToCents } from "@/services/erp/domain";
+import { atualizarTitulo, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
+import { reaisToCents } from "@/services/erp/domain";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
 const vazio = {
@@ -42,8 +42,6 @@ export function ContasPage() {
   const aberto = useQuery({ queryKey: ["erp", "titulos", "um", id], queryFn: () => obterTitulo(id ?? ""), enabled: Boolean(id) });
   const [form, setForm] = useState(vazio);
   const [editando, setEditando] = useState<TituloItem | null>(null);
-  const [nfAberta, setNfAberta] = useState(false);
-  const [nfForm, setNfForm] = useState({ numero: "", valor: "", vencimento: "", data: "", codigo: "" });
 
   const origem = form.modo === "texto" ? form.texto : form.modo;
   const quantidade = Math.max(1, Number(form.quantidade) || 1);
@@ -109,7 +107,7 @@ export function ContasPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <TituloPagina
           titulo="Manutenção de contas a receber"
-          descricao="Cadastro do título, depois os dados financeiros. No título salvo, Emitir boleto registra a cobrança na Cora e guarda o PDF aqui. Um título previsto, sem NFS-e e sem boleto, pode ser editado ou excluído."
+          descricao="Gerar NF emite a nota no Emissor Nacional. A nota autorizada cria o título, com cliente, valor, número e descrição. No título já criado ficam o boleto, o kit, o vencimento, o cancelamento e a baixa."
         />
         <AtalhoConsulta />
       </div>
@@ -241,7 +239,31 @@ export function ContasPage() {
               </Campo>
             )}
             {podeMudar && <div className="flex gap-2">
+              {!editando && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    executar(async () => {
+                      const criado = await emitirNfNacional({
+                        clienteId: form.clienteId,
+                        descricao: form.descricao,
+                        valor: form.valor,
+                        vencimento: form.tipoVencimento === "prazo_dias" ? form.primeiroVencimento : (form.vencimentos[0] ?? ""),
+                        centroId: form.centroId,
+                        forma: form.forma,
+                        banco: form.banco,
+                      });
+                      await recarregar();
+                      navigate(`/contas/${criado}`);
+                    }, "NFS-e autorizada. O título nasceu da nota.")
+                  }
+                >
+                  Gerar NF
+                </Button>
+              )}
               <Button
+                type="button"
                 onClick={() =>
                   executar(async () => {
                     if (editando) {
@@ -304,79 +326,10 @@ export function ContasPage() {
           </CardContent>
         </Card>
       )}
-      {canEdit && editando && (
-        <Card>
-          <CardContent className="space-y-3 py-4">
-            <div>
-              <h2 className="text-lg font-semibold">Nota fiscal</h2>
-              <p className="text-sm text-muted-foreground">
-                Gerar NF grava a nota já autorizada neste título ({MUNICIPIO_NFSE}). Não chama o Emissor Nacional. O botão fica ativo com o título faturado ou recebido, enquanto a NFS-e não está informada.
-              </p>
-            </div>
-            {editando.nfse?.status === "informada" ? (
-              <div className="space-y-2">
-                <p className="text-sm">NFS-e {editando.nfse.numero} · {editando.nfse.status}</p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => executar(() => anularNfse(editando).then(recarregar), "NFS-e cancelada")}
-                >
-                  Cancelar NFS-e
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={editando.status !== "faturado" && editando.status !== "recebido"}
-                  onClick={() => {
-                    setNfForm({
-                      numero: editando.numeroNf ?? "",
-                      valor: reaisInput(editando.valor),
-                      vencimento: editando.vencimento,
-                      data: hoje(),
-                      codigo: "",
-                    });
-                    setNfAberta(true);
-                  }}
-                >
-                  Gerar NF
-                </Button>
-                {editando.status !== "faturado" && editando.status !== "recebido" && (
-                  <p className="text-sm text-muted-foreground">Fature o título para gerar a NF. Previsto e cancelado não gravam nota.</p>
-                )}
-                {nfAberta && (editando.status === "faturado" || editando.status === "recebido") && (
-                  <div className="grid gap-3">
-                    <Campo label="Número"><Input value={nfForm.numero} onChange={(event) => setNfForm({ ...nfForm, numero: event.target.value })} /></Campo>
-                    <Campo label="Valor"><CampoDinheiro value={nfForm.valor} onChange={(valor) => setNfForm({ ...nfForm, valor })} /></Campo>
-                    <Campo label="Vencimento"><Input type="date" value={nfForm.vencimento} onChange={(event) => setNfForm({ ...nfForm, vencimento: event.target.value })} /></Campo>
-                    <Campo label="Data de emissão"><Input type="date" value={nfForm.data} onChange={(event) => setNfForm({ ...nfForm, data: event.target.value })} /></Campo>
-                    <Campo label="Código de verificação"><Input value={nfForm.codigo} onChange={(event) => setNfForm({ ...nfForm, codigo: event.target.value })} /></Campo>
-                    <Button
-                      type="button"
-                      onClick={() =>
-                        executar(async () => {
-                          await gravarNfse(editando, {
-                            numero: nfForm.numero,
-                            valor: nfForm.valor,
-                            vencimento: nfForm.vencimento,
-                            dataEmissao: nfForm.data,
-                            codigo: nfForm.codigo,
-                          });
-                          setNfAberta(false);
-                          await recarregar();
-                        }, "NFS-e registrada")
-                      }
-                    >
-                      Gerar NF
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {canEdit && !editando && (
+        <p className="text-sm text-muted-foreground">
+          Preencha cliente, descrição, valor, vencimento e centro. Gerar NF emite a nota no Emissor Nacional e, se ela for autorizada, abre o título. Rejeição não cria título.
+        </p>
       )}
       {canEdit && editando && <BoletoTitulo titulo={editando} alterado={alterado} onMudou={recarregar} />}
     </div>

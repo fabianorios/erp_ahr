@@ -142,7 +142,7 @@ export function PainelTitulos({
                 )}
                 {item.status === "faturado" && (
                   <>
-                    {item.nfse?.status !== "informada" && <Button type="button" variant="outline" size="sm" onClick={() => abrir("nfse", item)}>Gerar NF</Button>}
+                    {item.nfse?.status !== "informada" && <Button variant="outline" size="sm" onClick={() => abrir("nfse", item)}>Registrar NFS-e</Button>}
                     {item.nfse?.status === "informada" && <Button variant="ghost" size="sm" onClick={() => executar(() => anularNfse(item).then(onChange), "NFS-e cancelada")}>Cancelar NFS-e</Button>}
                     {!item.boleto && <Button variant="outline" size="sm" onClick={() => abrir("boleto", item)}>Registrar boleto</Button>}
                     {item.boleto && (item.boleto.status === "aberto" || item.boleto.status === "atrasado") && (
@@ -161,7 +161,7 @@ export function PainelTitulos({
                   </>
                 )}
                 {item.status === "recebido" && item.nfse?.status !== "informada" && (
-                  <Button type="button" variant="outline" size="sm" onClick={() => abrir("nfse", item)}>Gerar NF</Button>
+                  <Button variant="outline" size="sm" onClick={() => abrir("nfse", item)}>Registrar NFS-e</Button>
                 )}
               </div>
             )}
@@ -176,7 +176,7 @@ export function PainelTitulos({
             <DialogTitle>
               {dialogo === "criar" && "Novo título"}
               {dialogo === "editar" && "Editar título previsto"}
-              {dialogo === "nfse" && "Gerar NF"}
+              {dialogo === "nfse" && "NFS-e à mão"}
               {dialogo === "boleto" && "Boleto à mão"}
               {dialogo === "pagar" && "Baixa pelo boleto"}
               {dialogo === "manual" && "Baixa manual"}

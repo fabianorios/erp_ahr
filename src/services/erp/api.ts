@@ -921,6 +921,20 @@ export async function gravarNfse(
   await escrever("nfse.salvar", { tituloId: titulo.id, ...input });
 }
 
+export async function emitirNfNacional(input: {
+  clienteId: string;
+  descricao: string;
+  valor: string;
+  vencimento: string;
+  centroId: string;
+  forma: string;
+  banco: string;
+}): Promise<string> {
+  const corpo = await escrever("nfse.emitir", input);
+  if (!corpo.id) throw new DomainError("A nota foi autorizada, mas o título não voltou.");
+  return corpo.id;
+}
+
 export async function anularNfse(titulo: TituloItem): Promise<void> {
   cancelarNfse(titulo.nfse?.status ?? "ausente");
   await escrever("nfse.anular", { tituloId: titulo.id });
