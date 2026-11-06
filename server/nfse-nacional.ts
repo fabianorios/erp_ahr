@@ -579,15 +579,32 @@ export function enderecoLoginDanfse(producao: boolean): string {
 
 export function enderecoDanfse(producao: boolean, chave: string): string {
   const host = producao ? "https://www.nfse.gov.br" : "https://www.producaorestrita.nfse.gov.br";
-  return `${host}/EmissorNacional/Notas/Visualizar/Impressao?chave=${chave}`;
+  return `${host}/EmissorNacional/Notas/Visualizar/Index/${chave}`;
 }
 
-function urlsDanfse(producao: boolean, chave: string): { impressao: string; login: string; referer: string } {
-  const host = producao ? "https://www.nfse.gov.br" : "https://www.producaorestrita.nfse.gov.br";
+export function hrefImpressaoNfse(html: string, base: string): string | null {
+  for (const achado of html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) {
+    const href = decodificarHtml(achado[1] ?? "");
+    if (!/Impressao\?chave=/i.test(href)) continue;
+    let url: URL;
+    try {
+      url = new URL(href, base);
+    } catch {
+      continue;
+    }
+    const token = url.searchParams.get("chave") ?? "";
+    if (!token || /^\d{50}$/.test(token)) continue;
+    if (url.protocol !== "https:" || !url.hostname.endsWith("nfse.gov.br")) continue;
+    if (!/\/Notas\/Visualizar\/Impressao$/i.test(url.pathname)) continue;
+    return url.toString();
+  }
+  return null;
+}
+
+function urlsDanfse(producao: boolean, chave: string): { nota: string; login: string } {
   return {
-    impressao: enderecoDanfse(producao, chave),
+    nota: enderecoDanfse(producao, chave),
     login: enderecoLoginDanfse(producao),
-    referer: `${host}/EmissorNacional/Notas/Visualizar/Index/${chave}`,
   };
 }
 
@@ -598,11 +615,14 @@ async function baixarDanfse(chave: string, certificado: string, chavePrivada: st
   if (!cookies.length || login.status === 403 || /\/Login/i.test(login.location)) {
     throw new DomainError(falhaPdfDanfse([{ url: urls.login, status: login.status }]));
   }
-  const pagina = await httpsGet(urls.impressao, certificado, chavePrivada, {
-    ...cabecalhosPortal("text/html,application/xhtml+xml"),
-    cookie: cookies.join("; "),
-    referer: urls.referer,
-  });
+  const sessao = { ...cabecalhosPortal("text/html,application/xhtml+xml"), cookie: cookies.join("; ") };
+  const nota = await httpsGet(urls.nota, certificado, chavePrivada, sessao);
+  if (nota.status !== 200) throw new DomainError(falhaPdfDanfse([{ url: nota.url, status: nota.status }]));
+  const htmlNota = textoHtml(nota.corpo);
+  if (/type=["']password["']/i.test(htmlNota)) throw new DomainError("A sessão do Emissor Nacional não abriu a nota.");
+  const impressao = hrefImpressaoNfse(htmlNota, nota.url);
+  if (!impressao) throw new DomainError("A página da nota não tem o link de impressão.");
+  const pagina = await httpsGet(impressao, certificado, chavePrivada, { ...sessao, referer: urls.nota });
   const pronto = pdfDanfse(pagina.corpo);
   if (pronto) return pronto;
   if (pagina.status === 200) {
