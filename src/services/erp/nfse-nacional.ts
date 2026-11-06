@@ -32,6 +32,7 @@ export type PedidoNfse = {
   serie: string;
   numeroDps: string;
   emitidoEm: string;
+  competencia: string;
   ambiente: 1 | 2;
 };
 
@@ -127,6 +128,14 @@ export function instanteBrasil(agora: Date): string {
   return `${pegar("year")}-${pegar("month")}-${pegar("day")}T${pegar("hour")}:${pegar("minute")}:${pegar("second")}-03:00`;
 }
 
+/** Dia civil da emissão. A competência da DPS não pode passar dele nem ir para um mês seguinte. */
+export function competenciaEnviada(vencimento: string, emitidoEm: string): string {
+  const emissao = assertData(emitidoEm.slice(0, 10), "Emissão");
+  const dia = assertData(vencimento, "Vencimento");
+  if (dia.slice(0, 7) === emissao.slice(0, 7) && dia <= emissao) return dia;
+  return emissao;
+}
+
 export function codigoIbgeConhecido(cidade: string, uf: string): string | null {
   const nome = cidade.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z]/g, "");
   if (nome === "saocaetanodosul" && uf.trim().toUpperCase() === "SP") return CODIGO_MUNICIPIO_PRESTADOR;
@@ -172,6 +181,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
   if (banco && (banco.length < 2 || banco.length > 80)) throw new DomainError("Informe o banco de recebimento.");
   if (input.ambiente !== 1 && input.ambiente !== 2) throw new DomainError("O ambiente do Emissor Nacional é inválido.");
   idDps(cMunPrestador, cnpj, input.serie, input.numeroDps);
+  const competencia = competenciaEnviada(vencimento, input.emitidoEm);
   return {
     ...input,
     clienteId,
@@ -179,6 +189,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
     descricao,
     valor: centsToReais(valor),
     vencimento,
+    competencia,
     documento,
     nome,
     cep,
@@ -205,7 +216,7 @@ export function montarDps(pedido: PedidoNfse): string {
     `<verAplic>ERPAhr_1</verAplic>` +
     `<serie>${pronto.serie.padStart(5, "0")}</serie>` +
     `<nDPS>${pronto.numeroDps.padStart(15, "0")}</nDPS>` +
-    `<dCompet>${pronto.vencimento}</dCompet>` +
+    `<dCompet>${pronto.competencia}</dCompet>` +
     `<tpEmit>1</tpEmit>` +
     `<cLocEmi>${pronto.cMunPrestador}</cLocEmi>` +
     `<prest><CNPJ>${pronto.cnpjPrestador}</CNPJ>` +

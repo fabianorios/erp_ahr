@@ -11,6 +11,7 @@ import forge from "node-forge";
 import {
   ambienteNfse,
   idDps,
+  competenciaEnviada,
   instanteBrasil,
   lerNotaAutorizada,
   montarDps,
@@ -51,6 +52,7 @@ function pedido(parcial: Partial<PedidoNfse> = {}): PedidoNfse {
     serie: "1",
     numeroDps: "100000000000001",
     emitidoEm: "2026-11-06T08:00:00-03:00",
+    competencia: "2026-11-06",
     ambiente: 1,
     ...parcial,
   };
@@ -73,7 +75,17 @@ describe("emissão no Emissor Nacional", () => {
     assert.match(xml, /Consultoria mensal/);
     assert.match(xml, /19678493000141/);
     assert.match(xml, /<vServ>169\.00<\/vServ>/);
+    assert.match(xml, /<dhEmi>2026-11-06T08:00:00-03:00<\/dhEmi>/);
+    assert.match(xml, /<dCompet>2026-11-06<\/dCompet>/);
     assert.equal(instanteBrasil(new Date("2026-11-06T11:00:00Z")).startsWith("2026-11-06T08:00:00"), true);
+    const hoje = "2026-11-06";
+    assert.equal(competenciaEnviada("2026-11-02", `${hoje}T08:00:00-03:00`), "2026-11-02");
+    assert.equal(competenciaEnviada("2026-11-20", `${hoje}T08:00:00-03:00`), hoje);
+    assert.equal(competenciaEnviada("2026-12-20", `${hoje}T08:00:00-03:00`), hoje);
+    assert.equal(competenciaEnviada("2026-10-15", `${hoje}T08:00:00-03:00`), hoje);
+    const futuro = montarDps(pedido({ vencimento: "2026-12-20", competencia: "2026-12-20" }));
+    assert.match(futuro, /<dCompet>2026-11-06<\/dCompet>/);
+    assert.doesNotMatch(futuro, /<dCompet>2026-12/);
   });
 
   it("rejeição não cria título; nota autorizada nasce com cliente, valor, número e descrição", async () => {

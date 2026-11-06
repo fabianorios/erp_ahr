@@ -10,6 +10,7 @@ import { DomainError, centsToReais } from "../src/services/erp/domain.ts";
 import {
   ambienteNfse,
   codigoIbgeConhecido,
+  competenciaEnviada,
   instanteBrasil,
   lerNotaAutorizada,
   montarDps,
@@ -359,12 +360,15 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
   if (!centro?.ativo) throw new DomainError("Informe o centro de custo.");
   const prestador = configPrestador();
   const agora = new Date();
+  const emitidoEm = instanteBrasil(agora);
+  const vencimento = texto(dados, "vencimento");
   const cep = String(cliente.cep ?? "").replace(/\D/g, "");
   const pedido = validarPedidoNfse({
     clienteId,
     descricao: texto(dados, "descricao"),
     valor: texto(dados, "valor"),
-    vencimento: texto(dados, "vencimento"),
+    vencimento,
+    competencia: competenciaEnviada(vencimento, emitidoEm),
     centroId,
     forma: texto(dados, "forma"),
     banco: texto(dados, "banco"),
@@ -385,7 +389,7 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
     codigoServico: prestador.codigoServico,
     serie: prestador.serie,
     numeroDps: numeroDps(agora, agora.getMilliseconds()),
-    emitidoEm: instanteBrasil(agora),
+    emitidoEm,
     ambiente: prestador.ambiente,
   });
   const xml = assinarDps(montarDps(pedido), prestador.chave, prestador.certificado);
