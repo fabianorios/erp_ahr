@@ -128,17 +128,26 @@ function htmlDe(texto: string): string {
 
 export type AnexoEmail = { nome: string; tipo: string; bytes: Buffer };
 
+export const COPIA_EMAIL_CLIENTE = "fabianorios@ahrbrasil.com.br";
+
+function emailsDe(valor: string | string[] | undefined): string[] {
+  return (Array.isArray(valor) ? valor : valor ? [valor] : []).map((email) => email.trim()).filter(Boolean);
+}
+
 export function montarGraph(
   config: { fromEmail: string; fromName: string },
-  input: { para: string | string[]; assunto: string; texto: string; anexo?: AnexoEmail; anexos?: AnexoEmail[] },
+  input: { para: string | string[]; assunto: string; texto: string; anexo?: AnexoEmail; anexos?: AnexoEmail[]; copia?: string | string[] },
 ) {
-  const para = (Array.isArray(input.para) ? input.para : [input.para]).map((email) => email.trim()).filter(Boolean);
+  const para = emailsDe(input.para);
+  const destinatarios = new Set(para.map((email) => email.toLowerCase()));
+  const copia = emailsDe(input.copia).filter((email) => !destinatarios.has(email.toLowerCase()));
   const anexos = [...(input.anexos ?? []), ...(input.anexo ? [input.anexo] : [])];
   return {
     message: {
       subject: input.assunto,
       body: { contentType: "HTML", content: htmlDe(input.texto) },
       toRecipients: para.map((address) => ({ emailAddress: { address } })),
+      ...(copia.length ? { ccRecipients: copia.map((address) => ({ emailAddress: { address } })) } : {}),
       from: { emailAddress: { address: config.fromEmail, name: config.fromName } },
       ...(anexos.length
         ? {
@@ -161,6 +170,7 @@ export async function enviarEmail(input: {
   texto: string;
   anexo?: AnexoEmail;
   anexos?: AnexoEmail[];
+  copia?: string | string[];
 }): Promise<void> {
   const config = configGraph();
   const payload = montarGraph(config, input);

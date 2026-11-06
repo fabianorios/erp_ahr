@@ -23,7 +23,7 @@ import {
   type TituloParaCora,
 } from "../../src/services/erp/cora.ts";
 import { caminhoPdf, gravarPdfEm, lerPdfEm } from "../../server/boleto-cora.ts";
-import { montarGraph } from "../../server/email.ts";
+import { COPIA_EMAIL_CLIENTE, montarGraph } from "../../server/email.ts";
 
 const TITULO = "11111111-1111-4111-8111-111111111111";
 const HOJE = "2026-11-05";
@@ -481,9 +481,17 @@ describe("kit da NFS-e e do boleto", () => {
         assunto: "NFS-e e boleto",
         texto: mensagem?.texto ?? "",
         anexos: (mensagem?.anexos ?? []).map((anexo) => ({ nome: anexo.nome, tipo: "application/pdf", bytes: Buffer.from(pdf) })),
+        copia: COPIA_EMAIL_CLIENTE,
       },
     );
     assert.equal(graph.message.toRecipients.length, 2);
+    assert.deepEqual(graph.message.ccRecipients, [{ emailAddress: { address: COPIA_EMAIL_CLIENTE } }]);
+    const jaDestinatario = montarGraph(
+      { fromEmail: "financeiro@ahr.com.br", fromName: "AHR" },
+      { para: COPIA_EMAIL_CLIENTE, assunto: "Boleto", texto: "Segue o boleto.", copia: COPIA_EMAIL_CLIENTE },
+    );
+    assert.equal(jaDestinatario.message.toRecipients[0]?.emailAddress.address, COPIA_EMAIL_CLIENTE);
+    assert.equal(jaDestinatario.message.ccRecipients, undefined);
     assert.equal(graph.message.attachments?.length, 2);
     assert.equal(graph.message.attachments?.[0]?.name, "nfse-4521.pdf");
     assert.equal(graph.message.attachments?.[1]?.name, "boleto.pdf");

@@ -34,7 +34,7 @@ import {
   type PedidoCora,
   type TituloParaCora,
 } from "../src/services/erp/cora.ts";
-import { enviarEmail } from "./email.ts";
+import { COPIA_EMAIL_CLIENTE, enviarEmail } from "./email.ts";
 
 type Banco = SupabaseClient;
 
@@ -161,6 +161,7 @@ export async function enviarBoletoDoTitulo(db: Banco, tituloId: string, contatoI
           pix: linha.pix,
         }),
         anexo: { nome: "boleto.pdf", tipo: "application/pdf", bytes: pdf },
+        copia: COPIA_EMAIL_CLIENTE,
       });
       ok.push(contato.email);
     } catch (error) {
@@ -202,6 +203,7 @@ export async function enviarKitDoTitulo(db: Banco, tituloId: string, contatoIds:
         assunto: mensagem.assunto,
         texto: mensagem.texto,
         anexos: mensagem.anexos.map((anexo) => ({ nome: anexo.nome, tipo: anexo.tipo, bytes: Buffer.from(anexo.bytes) })),
+        copia: COPIA_EMAIL_CLIENTE,
       }),
   });
   return { aviso };
