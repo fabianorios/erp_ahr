@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
+import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import forge from "node-forge";
 import { SignedXml } from "xml-crypto";
@@ -126,23 +128,154 @@ function texto(dados: Record<string, unknown>, chave: string): string {
 
 type CertificadoA1 = { chave: string; certificado: string };
 
-/** Abre o PFX em memória. A senha não entra na mensagem de erro. */
-export function abrirPfx(pfx: Buffer, senha: string): CertificadoA1 {
+const RAIZ_GESTAO = "/var/www/gestaoconsultoria";
+const IGNORAR_GESTAO = new Set(["node_modules", "vendor", ".git", "storage", "dist", "build"]);
+
+/** Lê o PFX já configurado no Gestão. Não registra senha nem certificado. */
+export function certificadoDaGestao(raiz = RAIZ_GESTAO): { caminho: string; senha: string } | null {
+  if (!existsSync(raiz)) return null;
+  const textos: string[] = [];
+  coletarEnv(raiz, 0, textos);
+  return escolherCertificado(textos.flatMap(parseEnv));
+}
+
+function coletarEnv(dir: string, profundidade: number, textos: string[]): void {
+  if (profundidade > 2) return;
+  let entradas: string[] = [];
   try {
-    const der = forge.util.createBuffer(pfx.toString("binary"));
-    const asn1 = forge.asn1.fromDer(der);
-    const pacote = forge.pkcs12.pkcs12FromAsn1(asn1, senha);
-    const chaveBag = pacote.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0]?.key
-      ?? pacote.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag]?.[0]?.key;
-    const certBag = pacote.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag]?.[0]?.cert;
-    if (!chaveBag || !certBag) throw new Error("sem chave");
-    return {
-      chave: forge.pki.privateKeyToPem(chaveBag),
-      certificado: forge.pki.certificateToPem(certBag),
-    };
+    entradas = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const nome of entradas) {
+    if (IGNORAR_GESTAO.has(nome)) continue;
+    const caminho = join(dir, nome);
+    let info;
+    try {
+      info = statSync(caminho);
+    } catch {
+      continue;
+    }
+    if (info.isDirectory()) {
+      coletarEnv(caminho, profundidade + 1, textos);
+      continue;
+    }
+    if (nome !== ".env" && !nome.startsWith(".env.")) continue;
+    if (info.size > 200_000) continue;
+    try {
+      textos.push(readFileSync(caminho, "utf8"));
+    } catch {
+      continue;
+    }
+  }
+}
+
+function parseEnv(texto: string): { chave: string; valor: string }[] {
+  const saida: { chave: string; valor: string }[] = [];
+  for (const linha of texto.split("\n")) {
+    const limpa = linha.trim();
+    if (!limpa || limpa.startsWith("#")) continue;
+    const achado = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(limpa);
+    if (!achado) continue;
+    let valor = achado[2].trim();
+    if ((valor.startsWith('"') && valor.endsWith('"')) || (valor.startsWith("'") && valor.endsWith("'"))) valor = valor.slice(1, -1);
+    saida.push({ chave: achado[1], valor });
+  }
+  return saida;
+}
+
+function escolherCertificado(entradas: { chave: string; valor: string }[]): { caminho: string; senha: string } | null {
+  const pfxs = entradas.filter((item) => /\.(pfx|p12)$/i.test(item.valor.trim()));
+  const ordenados = [...pfxs].sort((a, b) => pontuarChave(b.chave) - pontuarChave(a.chave));
+  for (const item of ordenados) {
+    const senha = senhaDoPar(entradas, item.chave);
+    if (senha) return { caminho: item.valor.trim(), senha };
+  }
+  if (pfxs.length === 1) {
+    const senhas = entradas.filter((item) => /SENHA|PASSWORD|PASSWD|_PWD/i.test(item.chave) && item.valor && !/\.(pfx|p12)$/i.test(item.valor));
+    if (senhas.length === 1) return { caminho: pfxs[0].valor.trim(), senha: senhas[0].valor };
+  }
+  return null;
+}
+
+function pontuarChave(chave: string): number {
+  const nome = chave.toUpperCase();
+  let pontos = 0;
+  if (nome.includes("NFSE") || nome.includes("NFS")) pontos += 4;
+  if (nome.includes("A1")) pontos += 3;
+  if (nome.includes("CERT")) pontos += 2;
+  if (nome.includes("PFX")) pontos += 2;
+  return pontos;
+}
+
+function senhaDoPar(entradas: { chave: string; valor: string }[], chavePath: string): string | null {
+  const base = chavePath.replace(/_(PATH|FILE|CAMINHO|PFX|CERT|CERTIFICADO)$/i, "");
+  const nomes = [`${chavePath}_PASSWORD`, `${chavePath}_SENHA`, `${base}_PASSWORD`, `${base}_SENHA`, `${base}_PASS`, `${base}_PWD`];
+  for (const nome of nomes) {
+    const achado = entradas.find((item) => item.chave.toUpperCase() === nome.toUpperCase() && item.valor);
+    if (achado) return achado.valor;
+  }
+  return null;
+}
+
+function falhaCertificado(): DomainError {
+  return new DomainError("O certificado A1 não abriu. Confira o arquivo PFX e a senha.");
+}
+
+function abrirComForge(pfx: Buffer, senha: string): CertificadoA1 {
+  const der = forge.util.createBuffer(pfx.toString("binary"));
+  const asn1 = forge.asn1.fromDer(der);
+  const pacote = forge.pkcs12.pkcs12FromAsn1(asn1, senha);
+  const chaveBag = pacote.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0]?.key
+    ?? pacote.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag]?.[0]?.key;
+  const certBag = pacote.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag]?.[0]?.cert;
+  if (!chaveBag || !certBag) throw new Error("sem chave");
+  return {
+    chave: forge.pki.privateKeyToPem(chaveBag),
+    certificado: forge.pki.certificateToPem(certBag),
+  };
+}
+
+function pemDe(texto: string, rotulo: string): string {
+  const inicio = `-----BEGIN ${rotulo}-----`;
+  const fim = `-----END ${rotulo}-----`;
+  const de = texto.indexOf(inicio);
+  const ate = texto.indexOf(fim);
+  if (de < 0 || ate < 0) return "";
+  return `${texto.slice(de, ate + fim.length)}\n`;
+}
+
+function opensslPkcs12(caminho: string, senha: string, extra: string[]): string {
+  const resultado = spawnSync(
+    "openssl",
+    ["pkcs12", "-legacy", "-in", caminho, "-passin", "stdin", ...extra],
+    { input: `${senha}\n`, encoding: "utf8", maxBuffer: 2_000_000 },
+  );
+  if (resultado.status !== 0) throw falhaCertificado();
+  return resultado.stdout ?? "";
+}
+
+function abrirComOpenssl(caminho: string, senha: string): CertificadoA1 {
+  const chave = pemDe(opensslPkcs12(caminho, senha, ["-nocerts", "-noenc"]), "PRIVATE KEY")
+    || pemDe(opensslPkcs12(caminho, senha, ["-nocerts", "-noenc"]), "RSA PRIVATE KEY");
+  const certificado = pemDe(opensslPkcs12(caminho, senha, ["-clcerts", "-nokeys"]), "CERTIFICATE");
+  if (!chave || !certificado) throw falhaCertificado();
+  return { chave, certificado };
+}
+
+/** Tenta o leitor interno e, se o PFX for antigo, o OpenSSL com -legacy. A senha não entra na mensagem. */
+export function abrirPfx(pfx: Buffer, senha: string, caminho?: string): CertificadoA1 {
+  try {
+    return abrirComForge(pfx, senha);
   } catch (error) {
     if (error instanceof DomainError) throw error;
-    throw new DomainError("O certificado A1 não abriu. Confira o arquivo PFX e a senha.");
+    if (!caminho) throw falhaCertificado();
+    try {
+      return abrirComOpenssl(caminho, senha);
+    } catch (seguinte) {
+      if (seguinte instanceof DomainError) throw seguinte;
+      throw falhaCertificado();
+    }
   }
 }
 
@@ -154,14 +287,14 @@ function configPrestador(): {
   codigoServico: string;
   serie: string;
   cMun: string;
-  pfx: Buffer;
-  senha: string;
   chave: string;
   certificado: string;
 } {
   const ambiente = ambienteNfse(process.env.NFSE_AMBIENTE ?? "");
-  const certPath = (process.env.NFSE_CERT_PATH ?? "").trim();
-  const senha = process.env.NFSE_CERT_PASSWORD ?? "";
+  const gestao = certificadoDaGestao();
+  const doGestao = gestao && existsSync(gestao.caminho) ? gestao : null;
+  const certPath = doGestao?.caminho || (process.env.NFSE_CERT_PATH ?? "").trim();
+  const senha = doGestao?.senha || (process.env.NFSE_CERT_PASSWORD ?? "");
   if (!certPath || !senha.trim()) throw new DomainError("O certificado A1 da NFS-e não está configurado no servidor.");
   const serie = (process.env.NFSE_SERIE_DPS ?? "").trim();
   if (!serie) throw new DomainError("A série da DPS não está configurada.");
@@ -171,7 +304,7 @@ function configPrestador(): {
   } catch {
     throw new DomainError("O certificado A1 da NFS-e não está no servidor.");
   }
-  const aberto = abrirPfx(pfx, senha);
+  const aberto = abrirPfx(pfx, senha, certPath);
   return {
     base: ambiente.base,
     ambiente: ambiente.ambiente,
@@ -180,8 +313,6 @@ function configPrestador(): {
     codigoServico: (process.env.NFSE_ITEM_SERVICO ?? "").trim(),
     serie,
     cMun: (process.env.NFSE_CODIGO_MUNICIPIO ?? "").trim(),
-    pfx,
-    senha,
     chave: aberto.chave,
     certificado: aberto.certificado,
   };
@@ -244,7 +375,7 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
   });
   const xml = assinarDps(montarDps(pedido), prestador.chave, prestador.certificado);
   const enviado = gzipSync(Buffer.from(xml, "utf8")).toString("base64");
-  const resposta = await postarSefin(prestador.base, prestador.pfx, prestador.senha, enviado);
+  const resposta = await postarSefin(prestador.base, prestador.certificado, prestador.chave, enviado);
   const id = await aplicarNota(gravador(db), pedido, resposta.status, resposta.texto);
   await guardarPdf(db, id, prestador, pedido.ambiente === 1).catch(() => undefined);
   return { id };
@@ -284,28 +415,28 @@ function gravador(db: Banco): GravadorNfse {
   };
 }
 
-async function guardarPdf(db: Banco, tituloId: string, prestador: { pfx: Buffer; senha: string }, producao: boolean): Promise<void> {
+async function guardarPdf(db: Banco, tituloId: string, prestador: { certificado: string; chave: string }, producao: boolean): Promise<void> {
   const { data } = await db.from("erp_nfse").select("id_externo").eq("conta_receber_id", tituloId).maybeSingle();
-  const chave = typeof data?.id_externo === "string" ? data.id_externo : "";
-  if (!/^\d{50}$/.test(chave)) return;
+  const chaveAcesso = typeof data?.id_externo === "string" ? data.id_externo : "";
+  if (!/^\d{50}$/.test(chaveAcesso)) return;
   const host = producao ? "https://adn.nfse.gov.br" : "https://adn.producaorestrita.nfse.gov.br";
-  const pdf = await baixarPdf(`${host}/danfse/${chave}`, prestador.pfx, prestador.senha);
+  const pdf = await baixarPdf(`${host}/danfse/${chaveAcesso}`, prestador.certificado, prestador.chave);
   await gravador(db).gravarPdf(tituloId, pdf);
 }
 
-function postarSefin(base: string, pfx: Buffer, senha: string, dpsXmlGZipB64: string): Promise<{ status: number; texto: string }> {
+function postarSefin(base: string, certificado: string, chave: string, dpsXmlGZipB64: string): Promise<{ status: number; texto: string }> {
   return httpsTexto({
     url: `${base}/nfse`,
     method: "POST",
-    pfx,
-    senha,
+    certificado,
+    chave,
     body: JSON.stringify({ dpsXmlGZipB64 }),
     headers: { "content-type": "application/json", accept: "application/json" },
     limite: 8_000_000,
   });
 }
 
-function baixarPdf(url: string, pfx: Buffer, senha: string): Promise<Uint8Array> {
+function baixarPdf(url: string, certificado: string, chave: string): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const alvo = new URL(url);
     const req = httpsRequest(
@@ -314,8 +445,8 @@ function baixarPdf(url: string, pfx: Buffer, senha: string): Promise<Uint8Array>
         hostname: alvo.hostname,
         path: `${alvo.pathname}${alvo.search}`,
         method: "GET",
-        pfx,
-        passphrase: senha,
+        cert: certificado,
+        key: chave,
         headers: { accept: "application/pdf" },
         timeout: 20_000,
       },
@@ -344,8 +475,8 @@ function baixarPdf(url: string, pfx: Buffer, senha: string): Promise<Uint8Array>
 function httpsTexto(opcoes: {
   url: string;
   method: string;
-  pfx: Buffer;
-  senha: string;
+  certificado: string;
+  chave: string;
   body?: string;
   headers: Record<string, string>;
   limite: number;
@@ -358,8 +489,8 @@ function httpsTexto(opcoes: {
         hostname: alvo.hostname,
         path: `${alvo.pathname}${alvo.search}`,
         method: opcoes.method,
-        pfx: opcoes.pfx,
-        passphrase: opcoes.senha,
+        cert: opcoes.certificado,
+        key: opcoes.chave,
         headers: opcoes.headers,
         timeout: 20_000,
       },
