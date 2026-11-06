@@ -577,12 +577,16 @@ export function enderecoLoginDanfse(producao: boolean): string {
     : "https://certificado.producaorestrita.nfse.gov.br/EmissorNacional/Certificado";
 }
 
+export function enderecoDanfse(producao: boolean, chave: string): string {
+  const host = producao ? "https://certificado.nfse.gov.br" : "https://certificado.producaorestrita.nfse.gov.br";
+  return `${host}/EmissorNacional/Notas/Download/DANFSe/${chave}`;
+}
+
 function urlsDanfse(producao: boolean, chave: string): { adn: string; emissor: string; login: string } {
-  const portal = producao ? "https://www.nfse.gov.br" : "https://www.producaorestrita.nfse.gov.br";
   const adn = producao ? "https://adn.nfse.gov.br" : "https://adn.producaorestrita.nfse.gov.br";
   return {
     adn: `${adn}/danfse/${chave}`,
-    emissor: `${portal}/EmissorNacional/Notas/Download/DANFSe/${chave}`,
+    emissor: enderecoDanfse(producao, chave),
     login: enderecoLoginDanfse(producao),
   };
 }
@@ -610,6 +614,8 @@ async function baixarDanfse(chave: string, certificado: string, chavePrivada: st
     certificado,
     chavePrivada,
     { ...cabecalhosPortal("application/pdf,*/*;q=0.8"), cookie: cookies.join("; ") },
+    true,
+    0,
     true,
   );
   const pdf = pdfDanfse(baixado.corpo);
@@ -654,6 +660,7 @@ function httpsGet(
   headers: Record<string, string>,
   seguir = false,
   saltos = 0,
+  mesmoHost = false,
 ): Promise<RespostaHttp> {
   const alvo = new URL(url);
   return new Promise((resolve, reject) => {
@@ -688,8 +695,9 @@ function httpsGet(
           const jar = juntarCookies(headers.cookie, cookies);
           if (seguir && saltos < 5 && status >= 300 && status < 400 && location && !/\/Login/i.test(location)) {
             const proxima = new URL(location, url);
-            if (proxima.protocol === "https:" && proxima.hostname.endsWith("nfse.gov.br")) {
-              resolve(httpsGet(proxima.toString(), certificado, chave, { ...headers, cookie: jar.join("; ") }, true, saltos + 1));
+            const hostPermitido = proxima.protocol === "https:" && proxima.hostname.endsWith("nfse.gov.br") && (!mesmoHost || proxima.hostname === alvo.hostname);
+            if (hostPermitido) {
+              resolve(httpsGet(proxima.toString(), certificado, chave, { ...headers, cookie: jar.join("; ") }, true, saltos + 1, mesmoHost));
               return;
             }
           }

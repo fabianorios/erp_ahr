@@ -19,7 +19,7 @@ import {
   validarBaseSefin,
   type PedidoNfse,
 } from "../../src/services/erp/nfse-nacional.ts";
-import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, enderecoLoginDanfse, falhaPdfDanfse, incorporarXml, pdfDanfse } from "../../server/nfse-nacional.ts";
+import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, enderecoDanfse, enderecoLoginDanfse, falhaPdfDanfse, incorporarXml, pdfDanfse } from "../../server/nfse-nacional.ts";
 
 const CLIENTE = "11111111-1111-4111-8111-111111111111";
 const CENTRO = "22222222-2222-4222-8222-222222222222";
@@ -215,6 +215,9 @@ describe("emissão no Emissor Nacional", () => {
       assert.equal(emissao.senha, senha);
       assert.equal(enderecoLoginDanfse(true), "https://certificado.nfse.gov.br/EmissorNacional/Certificado");
       assert.equal(enderecoLoginDanfse(false), "https://certificado.producaorestrita.nfse.gov.br/EmissorNacional/Certificado");
+      const chaveNota = "2".repeat(50);
+      assert.equal(enderecoDanfse(true, chaveNota), `https://certificado.nfse.gov.br/EmissorNacional/Notas/Download/DANFSe/${chaveNota}`);
+      assert.equal(enderecoDanfse(false, chaveNota), `https://certificado.producaorestrita.nfse.gov.br/EmissorNacional/Notas/Download/DANFSe/${chaveNota}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
