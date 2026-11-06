@@ -25,6 +25,7 @@ export type PedidoNfse = {
   cep: string;
   complemento: string;
   cMunTomador: string;
+  cMunPrestador: string;
   cnpjPrestador: string;
   inscricaoMunicipal: string;
   codigoServico: string;
@@ -84,6 +85,18 @@ export function validarBaseSefin(valor: string): string {
 
 export function ambienteDaBase(base: string): 1 | 2 {
   return new URL(base).hostname === "sefin.producaorestrita.nfse.gov.br" ? 2 : 1;
+}
+
+/** Lê só o nome do ambiente. Não devolve o texto configurado. */
+export function ambienteNfse(valor: string): { ambiente: 1 | 2; base: string } {
+  const texto = valor.trim().toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+  if (texto === "1" || texto === "producao" || texto === "prod") {
+    return { ambiente: 1, base: "https://sefin.nfse.gov.br/SefinNacional" };
+  }
+  if (texto === "2" || texto === "homologacao" || texto === "restrita" || texto === "producaorestrita") {
+    return { ambiente: 2, base: "https://sefin.producaorestrita.nfse.gov.br/SefinNacional" };
+  }
+  throw new DomainError("O ambiente da NFS-e não está configurado.");
 }
 
 export function idDps(cMun: string, cnpj: string, serie: string, nDps: string): string {
@@ -148,7 +161,9 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
   const cnpj = somenteDigitos(input.cnpjPrestador);
   if (cnpj.length !== 14) throw new DomainError("O CNPJ do prestador não está configurado.");
   const codigoServico = somenteDigitos(input.codigoServico);
-  if (!/^\d{6}$/.test(codigoServico)) throw new DomainError("O código de serviço da NFS-e não está configurado.");
+  if (!/^\d{6}$/.test(codigoServico)) throw new DomainError("O item de serviço da NFS-e não está configurado.");
+  const cMunPrestador = somenteDigitos(input.cMunPrestador);
+  if (!/^\d{7}$/.test(cMunPrestador)) throw new DomainError("O município emissor da NFS-e não está configurado.");
   const forma = input.forma.trim() || "boleto";
   if (forma !== "boleto" && forma !== "pix" && forma !== "transferencia" && forma !== "outro") {
     throw new DomainError("Informe a forma de recebimento.");
@@ -156,7 +171,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
   const banco = input.banco.trim();
   if (banco && (banco.length < 2 || banco.length > 80)) throw new DomainError("Informe o banco de recebimento.");
   if (input.ambiente !== 1 && input.ambiente !== 2) throw new DomainError("O ambiente do Emissor Nacional é inválido.");
-  idDps(CODIGO_MUNICIPIO_PRESTADOR, cnpj, input.serie, input.numeroDps);
+  idDps(cMunPrestador, cnpj, input.serie, input.numeroDps);
   return {
     ...input,
     clienteId,
@@ -167,6 +182,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
     documento,
     nome,
     cep,
+    cMunPrestador,
     cnpjPrestador: cnpj,
     codigoServico,
     forma,
@@ -176,7 +192,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
 
 export function montarDps(pedido: PedidoNfse): string {
   const pronto = validarPedidoNfse(pedido);
-  const id = idDps(CODIGO_MUNICIPIO_PRESTADOR, pronto.cnpjPrestador, pronto.serie, pronto.numeroDps);
+  const id = idDps(pronto.cMunPrestador, pronto.cnpjPrestador, pronto.serie, pronto.numeroDps);
   const doc = pronto.documento.length === 14 ? "CNPJ" : "CPF";
   const inscricao = pronto.inscricaoMunicipal.trim();
   const email = pronto.email.trim();
@@ -191,7 +207,7 @@ export function montarDps(pedido: PedidoNfse): string {
     `<nDPS>${pronto.numeroDps.padStart(15, "0")}</nDPS>` +
     `<dCompet>${pronto.vencimento}</dCompet>` +
     `<tpEmit>1</tpEmit>` +
-    `<cLocEmi>${CODIGO_MUNICIPIO_PRESTADOR}</cLocEmi>` +
+    `<cLocEmi>${pronto.cMunPrestador}</cLocEmi>` +
     `<prest><CNPJ>${pronto.cnpjPrestador}</CNPJ>` +
     (inscricao ? `<IM>${xml(inscricao)}</IM>` : "") +
     `<regTrib><opSimpNac>1</opSimpNac><regEspTrib>0</regEspTrib></regTrib></prest>` +
@@ -201,7 +217,7 @@ export function montarDps(pedido: PedidoNfse): string {
     `<xLgr>${xml(pronto.logradouro.trim())}</xLgr><nro>${xml(pronto.numero.trim())}</nro>` +
     (complemento ? `<xCpl>${xml(complemento)}</xCpl>` : "") +
     `<xBairro>${xml(pronto.bairro.trim())}</xBairro></end></toma>` +
-    `<serv><locPrest><cLocPrestacao>${CODIGO_MUNICIPIO_PRESTADOR}</cLocPrestacao></locPrest>` +
+    `<serv><locPrest><cLocPrestacao>${pronto.cMunPrestador}</cLocPrestacao></locPrest>` +
     `<cServ><cTribNac>${pronto.codigoServico}</cTribNac><xDescServ>${xml(pronto.descricao)}</xDescServ></cServ></serv>` +
     `<valores><vServPrest><vServ>${pronto.valor}</vServ></vServPrest>` +
     `<trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>1</tpRetISSQN></tribMun>` +

@@ -3,7 +3,9 @@ import { generateKeyPairSync } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { describe, it } from "node:test";
 import { DomainError } from "../../src/services/erp/domain.ts";
+import forge from "node-forge";
 import {
+  ambienteNfse,
   idDps,
   instanteBrasil,
   lerNotaAutorizada,
@@ -12,7 +14,7 @@ import {
   validarBaseSefin,
   type PedidoNfse,
 } from "../../src/services/erp/nfse-nacional.ts";
-import { aplicarNota, assinarDps, incorporarXml } from "../../server/nfse-nacional.ts";
+import { abrirPfx, aplicarNota, assinarDps, incorporarXml } from "../../server/nfse-nacional.ts";
 
 const CLIENTE = "11111111-1111-4111-8111-111111111111";
 const CENTRO = "22222222-2222-4222-8222-222222222222";
@@ -38,6 +40,7 @@ function pedido(parcial: Partial<PedidoNfse> = {}): PedidoNfse {
     cep: "09510-000",
     complemento: "",
     cMunTomador: "3548807",
+    cMunPrestador: "3548807",
     cnpjPrestador: "50516724000160",
     inscricaoMunicipal: "",
     codigoServico: "010501",
@@ -57,6 +60,9 @@ describe("emissão no Emissor Nacional", () => {
   it("monta o id da DPS como o Emissor Nacional e não chama a rede", () => {
     assert.equal(idDps("3106200", "50516724000160", "1", "100000000000001"), "DPS310620025051672400016000001100000000000001");
     assert.match(idDps("3106200", "50516724000160", "1", "100000000000001"), /^DPS\d{42}$/);
+    assert.equal(ambienteNfse("producao").ambiente, 1);
+    assert.equal(ambienteNfse("2").base, "https://sefin.producaorestrita.nfse.gov.br/SefinNacional");
+    assert.throws(() => ambienteNfse("valor-que-nao-pode-vazar"), (error: unknown) => error instanceof DomainError && !String(error.message).includes("valor-que-nao-pode-vazar"));
     assert.equal(validarBaseSefin("https://sefin.nfse.gov.br/SefinNacional"), "https://sefin.nfse.gov.br/SefinNacional");
     assert.throws(() => validarBaseSefin("https://exemplo.invalid/SefinNacional"), DomainError);
     const xml = montarDps(pedido());
@@ -103,6 +109,27 @@ describe("emissão no Emissor Nacional", () => {
     assert.equal(titulo.origem, "Emissor Nacional");
     assert.equal(titulo.numeroNf, "321");
     assert.equal(titulo.valorCents, 16900);
+  });
+
+  it("abre o PFX com a senha e não devolve a senha no erro", () => {
+    const senha = "senha-de-teste";
+    const chaves = forge.pki.rsa.generateKeyPair(2048);
+    const certificado = forge.pki.createCertificate();
+    certificado.publicKey = chaves.publicKey;
+    certificado.serialNumber = "01";
+    certificado.validity.notBefore = new Date();
+    certificado.validity.notAfter = new Date();
+    certificado.validity.notAfter.setFullYear(certificado.validity.notBefore.getFullYear() + 1);
+    const nome = [{ name: "commonName", value: "teste" }];
+    certificado.setSubject(nome);
+    certificado.setIssuer(nome);
+    certificado.sign(chaves.privateKey);
+    const asn1 = forge.pkcs12.toPkcs12Asn1(chaves.privateKey, [certificado], senha, { algorithm: "3des" });
+    const pfx = Buffer.from(forge.asn1.toDer(asn1).getBytes(), "binary");
+    const aberto = abrirPfx(pfx, senha);
+    assert.match(aberto.chave, /BEGIN RSA PRIVATE KEY|BEGIN PRIVATE KEY/);
+    assert.match(aberto.certificado, /BEGIN CERTIFICATE/);
+    assert.throws(() => abrirPfx(pfx, `${senha}-errada`), (error: unknown) => error instanceof DomainError && !String(error.message).includes(senha));
   });
 
   it("assina a DPS sem enviar", () => {
