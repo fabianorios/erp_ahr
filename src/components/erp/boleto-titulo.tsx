@@ -185,7 +185,11 @@ export function BoletoTitulo({
         )}
         <AvisoConsulta erro={kit.error} />
         {!podeKit && !kit.isLoading && !kit.error && (
-          <p className="text-sm text-muted-foreground">Enviar kit fica disponível quando o PDF da NFS-e e o PDF do boleto Cora estão no servidor.</p>
+          <p className="text-sm text-muted-foreground">
+            {titulo.nfse && !titulo.nfse.temPdf
+              ? "O PDF desta NFS-e não está no servidor."
+              : "Enviar kit fica disponível quando o PDF da NFS-e e o PDF do boleto Cora estão no servidor."}
+          </p>
         )}
         {envio && (
           <div className="space-y-2">

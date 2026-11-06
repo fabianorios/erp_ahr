@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AvisoConsulta, Campo, CampoDinheiro, TituloPagina, executar, reaisInput } from "@/components/erp/apresentacao";
+import { AvisoConsulta, Campo, CampoDinheiro, TituloPagina, dataBr, executar, reaisInput } from "@/components/erp/apresentacao";
 import { AtalhoConsulta } from "@/components/erp/atalho-consulta";
 import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
@@ -307,20 +307,6 @@ export function ContasPage() {
               >
                 {editando ? "Salvar título" : "Criar título previsto"}
               </Button>
-              {editando && podeMudar && (
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    executar(async () => {
-                      await excluirTitulo(editando);
-                      await recarregar();
-                      navigate("/contas");
-                    }, "Título excluído")
-                  }
-                >
-                  Excluir
-                </Button>
-              )}
             </div>}
             </fieldset>
           </CardContent>
@@ -330,6 +316,34 @@ export function ContasPage() {
         <p className="text-sm text-muted-foreground">
           Preencha cliente, descrição, valor, vencimento e centro. Gerar NF emite a nota no Emissor Nacional e, se ela for autorizada, abre o título. Rejeição não cria título.
         </p>
+      )}
+      {editando?.nfse && (
+        <Card>
+          <CardContent className="space-y-2 py-4">
+            <h2 className="text-lg font-semibold">NFS-e</h2>
+            <p className="text-sm">Número {editando.nfse.numero}</p>
+            <p className="text-sm">Status {editando.nfse.status}</p>
+            <p className="text-sm">Emissão {dataBr(editando.nfse.dataEmissao)}</p>
+            {!editando.nfse.temPdf && (
+              <p className="text-sm text-muted-foreground">O PDF desta NFS-e não está no servidor.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {canEdit && editando && !editando.nfse && !editando.boleto && (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() =>
+            executar(async () => {
+              await excluirTitulo(editando);
+              await recarregar();
+              navigate("/contas");
+            }, "Título excluído")
+          }
+        >
+          Excluir título
+        </Button>
       )}
       {canEdit && editando && <BoletoTitulo titulo={editando} alterado={alterado} onMudou={recarregar} />}
     </div>

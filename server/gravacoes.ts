@@ -26,6 +26,7 @@ import {
   pagarDespesa,
   percentToBp,
   podeCancelarTitulo,
+  podeExcluirTitulo,
   proximoNumero,
   reaisToCents,
   registrarBoleto,
@@ -190,6 +191,8 @@ export async function executarGravacao(
       return cancelarTituloAtual(db, dados);
     case "titulo.excluir":
       return excluirTitulo(db, dados);
+    case "pagar.excluir":
+      return excluirContaPagar(db, dados);
     case "nfse.salvar":
       return salvarNfse(db, dados);
     case "nfse.anular":
@@ -1190,11 +1193,20 @@ async function cancelarTituloAtual(db: Banco, dados: Record<string, unknown>): P
 
 async function excluirTitulo(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {
   const id = idDe(dados.id, "Título");
-  const { titulo, nfse, boleto } = await documentosDoTitulo(db, id);
-  if (titulo.status !== "previsto" || nfse || boleto) {
-    throw new DomainError("Só um título previsto, sem NFS-e e sem boleto, pode ser excluído.");
-  }
+  const { nfse, boleto } = await documentosDoTitulo(db, id);
+  podeExcluirTitulo(Boolean(nfse), Boolean(boleto));
   const { data, error } = await db.from("erp_contas_receber").delete().eq("id", id).select("id");
+  falhar(error);
+  if (!data?.length) throw new DomainError("Título não encontrado.");
+  return { id };
+}
+
+async function excluirContaPagar(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {
+  const id = idDe(dados.id, "Título");
+  const { data: conta, error: leitura } = await db.from("erp_contas_pagar").select("id").eq("id", id).maybeSingle();
+  falhar(leitura);
+  if (!conta) throw new DomainError("Título não encontrado.");
+  const { data, error } = await db.from("erp_contas_pagar").delete().eq("id", id).select("id");
   falhar(error);
   if (!data?.length) throw new DomainError("Título não encontrado.");
   return { id };

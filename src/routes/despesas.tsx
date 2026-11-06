@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AvisoConsulta, Campo, CampoDinheiro, CampoDocumento, Pill, TituloPagina, dataBr, executar, mesAtual, reais, reaisInput, rotulo } from "@/components/erp/apresentacao";
 import { useAuth } from "@/lib/auth-context";
-import { cancelarConta, criarDespesa, excluirDespesa, listarCentros, listarDespesas, pagarConta, salvarDespesa } from "@/services/erp/api";
+import { cancelarConta, criarDespesa, excluirContaPagar, excluirDespesa, listarCentros, listarDespesas, pagarConta, salvarDespesa } from "@/services/erp/api";
 import { totaisDoMes, type CentroTipo } from "@/services/erp/domain";
 
 const vazio = {
@@ -21,6 +22,8 @@ const vazio = {
 };
 
 export function DespesasPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
   const { canEdit } = useAuth();
   const qc = useQueryClient();
   const [mes, setMes] = useState(mesAtual);
@@ -53,6 +56,43 @@ export function DespesasPage() {
 
   const recarregar = () => qc.invalidateQueries({ queryKey: ["erp"] });
   const centro = disponiveis.find((item) => item.id === form.centroId) ?? disponiveis[0];
+  const tituloAberto = id ? (despesas.data ?? []).find((item) => item.id === id) : undefined;
+
+  if (id) {
+    return (
+      <div className="space-y-6">
+        <TituloPagina titulo="Título a pagar" descricao="A exclusão apaga só esta conta. A despesa, os outros títulos e o favorecido permanecem." />
+        <AvisoConsulta erro={despesas.error} />
+        {!despesas.isLoading && !tituloAberto && <p className="text-sm text-muted-foreground">Título não encontrado.</p>}
+        {tituloAberto && (
+          <Card>
+            <CardContent className="space-y-3 py-4">
+              <div className="font-medium">{tituloAberto.descricao}</div>
+              <p className="text-sm text-muted-foreground">
+                {tituloAberto.favorecidoNome} · {reais(tituloAberto.valor)} · vence {dataBr(tituloAberto.vencimento)}
+              </p>
+              {tituloAberto.contaId ? <Pill valor={tituloAberto.contaStatus} /> : <p className="text-sm text-muted-foreground">Este lançamento não tem título a pagar.</p>}
+              {canEdit && tituloAberto.contaId && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    executar(async () => {
+                      await excluirContaPagar(tituloAberto.contaId!);
+                      await recarregar();
+                      navigate("/despesas");
+                    }, "Título excluído")
+                  }
+                >
+                  Excluir título
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -175,6 +215,7 @@ export function DespesasPage() {
               </div>
               {canEdit && (
                 <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => navigate(`/despesas/${item.id}`)}>Abrir título</Button>
                   <Button
                     variant="outline"
                     onClick={() => {

@@ -1120,6 +1120,10 @@ export function faturarTitulo(status: TituloStatus): void {
   if (status !== "previsto") throw new DomainError("Só título previsto pode ser faturado.");
 }
 
+export function podeExcluirTitulo(temNota: boolean, temBoleto: boolean): void {
+  if (temNota || temBoleto) throw new DomainError("O título tem nota ou boleto e não pode ser excluído.");
+}
+
 export function podeCancelarTitulo(titulo: DocTitulo): void {
   if (titulo.status === "previsto") return;
   if (titulo.status !== "faturado") throw new DomainError("Este título não pode ser cancelado.");

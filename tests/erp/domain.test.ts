@@ -35,6 +35,7 @@ import {
   pagarBoleto,
   pagarDespesa,
   podeCancelarTitulo,
+  podeExcluirTitulo,
   htmlAdicionais,
   normalizarValidade,
   validarAdicionais,
@@ -386,6 +387,9 @@ describe("NFS-e e boleto à mão", () => {
     assert.equal(baixa.valorRecebido, 105000);
     assert.throws(() => baixaManual({ tituloStatus: "faturado", boleto: "aberto", valor: "1000", data: "2026-03-20", meio: "manual" }), /boleto pago/);
     assert.throws(() => podeCancelarTitulo({ id: "t", status: "faturado", nfse: "informada", boleto: "cancelado" }), /NFS-e/);
+    podeExcluirTitulo(false, false);
+    assert.throws(() => podeExcluirTitulo(true, false), /nota ou boleto/);
+    assert.throws(() => podeExcluirTitulo(false, true), /nota ou boleto/);
   });
 });
 

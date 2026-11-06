@@ -34,6 +34,7 @@ import {
   pagarDespesa,
   percentToBp,
   podeCancelarTitulo,
+  podeExcluirTitulo,
   reaisToCents,
   registrarBoleto,
   registrarNfse,
@@ -637,6 +638,7 @@ export type TituloItem = {
     dataEmissao: string;
     status: NfseStatus;
     codigo: string | null;
+    temPdf: boolean;
   } | null;
   boleto: {
     id: string;
@@ -693,6 +695,7 @@ function mapTitulo(row: any): TituloItem {
           dataEmissao: dia(nfse.data_emissao),
           status: nfse.status,
           codigo: nfse.codigo_verificacao,
+          temPdf: typeof nfse.pdf_path === "string" && nfse.pdf_path.trim().length > 0,
         }
       : null,
     boleto: boleto
@@ -900,10 +903,12 @@ export async function cancelarTitulo(titulo: TituloItem): Promise<void> {
 }
 
 export async function excluirTitulo(titulo: TituloItem): Promise<void> {
-  if (titulo.status !== "previsto" || titulo.nfse || titulo.boleto) {
-    throw new DomainError("Só um título previsto, sem NFS-e e sem boleto, pode ser excluído.");
-  }
+  podeExcluirTitulo(Boolean(titulo.nfse), Boolean(titulo.boleto));
   await escrever("titulo.excluir", { id: titulo.id });
+}
+
+export async function excluirContaPagar(contaId: string): Promise<void> {
+  await escrever("pagar.excluir", { id: contaId });
 }
 
 export async function gravarNfse(

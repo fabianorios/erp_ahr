@@ -150,6 +150,7 @@ export function App() {
             <Route path="/clientes" element={<ClientesPage />} />
             <Route path="/centros" element={<CentrosPage />} />
             <Route path="/despesas" element={<DespesasPage />} />
+            <Route path="/despesas/:id" element={<DespesasPage />} />
             <Route path="/pessoal" element={<PessoalPage />} />
             <Route path="/propostas" element={<PropostasPage />} />
             <Route path="/propostas/:id" element={<PropostaPage />} />
