@@ -218,6 +218,24 @@ function senhaDoPar(entradas: { chave: string; valor: string }[], chavePath: str
   return null;
 }
 
+/** No servidor do Gestão o A1 de lá é obrigatório. Fora dele, vale o PFX do próprio ERP. */
+export function certificadoDaEmissao(
+  raiz = RAIZ_GESTAO,
+  ambiente: NodeJS.ProcessEnv = process.env,
+): { caminho: string; senha: string } {
+  if (existsSync(raiz)) {
+    const gestao = certificadoDaGestao(raiz);
+    if (!gestao?.caminho || !gestao.senha || !existsSync(gestao.caminho)) {
+      throw new DomainError("O certificado A1 do Gestão não foi encontrado.");
+    }
+    return gestao;
+  }
+  const caminho = (ambiente.NFSE_CERT_PATH ?? "").trim();
+  const senha = ambiente.NFSE_CERT_PASSWORD ?? "";
+  if (!caminho || !senha.trim()) throw new DomainError("O certificado A1 da NFS-e não está configurado no servidor.");
+  return { caminho, senha };
+}
+
 function falhaCertificado(): DomainError {
   return new DomainError("O certificado A1 não abriu. Confira o arquivo PFX e a senha.");
 }
@@ -291,10 +309,7 @@ function configPrestador(): {
   certificado: string;
 } {
   const ambiente = ambienteNfse(process.env.NFSE_AMBIENTE ?? "");
-  const gestao = certificadoDaGestao();
-  const doGestao = gestao && existsSync(gestao.caminho) ? gestao : null;
-  const certPath = doGestao?.caminho || (process.env.NFSE_CERT_PATH ?? "").trim();
-  const senha = doGestao?.senha || (process.env.NFSE_CERT_PASSWORD ?? "");
+  const { caminho: certPath, senha } = certificadoDaEmissao();
   if (!certPath || !senha.trim()) throw new DomainError("O certificado A1 da NFS-e não está configurado no servidor.");
   const serie = (process.env.NFSE_SERIE_DPS ?? "").trim();
   if (!serie) throw new DomainError("A série da DPS não está configurada.");

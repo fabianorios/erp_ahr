@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -18,7 +18,7 @@ import {
   validarBaseSefin,
   type PedidoNfse,
 } from "../../src/services/erp/nfse-nacional.ts";
-import { abrirPfx, aplicarNota, assinarDps, certificadoDaGestao, incorporarXml } from "../../server/nfse-nacional.ts";
+import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, incorporarXml } from "../../server/nfse-nacional.ts";
 
 const CLIENTE = "11111111-1111-4111-8111-111111111111";
 const CENTRO = "22222222-2222-4222-8222-222222222222";
@@ -151,6 +151,15 @@ describe("emissão no Emissor Nacional", () => {
       assert.equal(pedido.status, 0);
       const pacote = spawnSync("openssl", ["pkcs12", "-export", "-legacy", "-certpbe", "PBE-SHA1-RC2-40", "-keypbe", "PBE-SHA1-RC2-40", "-macalg", "SHA1", "-inkey", chave, "-in", cert, "-out", pfx, "-passout", `pass:${senha}`], { encoding: "utf8" });
       assert.equal(pacote.status, 0);
+      const emissao = certificadoDaEmissao(dir, { NFSE_CERT_PATH: "/tmp/outro.pfx", NFSE_CERT_PASSWORD: "outra" });
+      assert.equal(emissao.caminho, pfx);
+      mkdirSync(join(dir, "vazio"));
+      assert.throws(
+        () => certificadoDaEmissao(join(dir, "vazio"), { NFSE_CERT_PATH: "/tmp/outro.pfx", NFSE_CERT_PASSWORD: "outra" }),
+        (error: unknown) => error instanceof DomainError && !String(error.message).includes("outra"),
+      );
+      const semGestao = certificadoDaEmissao(join(dir, "nao-existe"), { NFSE_CERT_PATH: pfx, NFSE_CERT_PASSWORD: senha });
+      assert.equal(semGestao.caminho, pfx);
       const aberto = abrirPfx(Buffer.from("nao-e-pfx"), senha, pfx);
       assert.match(aberto.chave, /BEGIN (RSA )?PRIVATE KEY/);
       assert.match(aberto.certificado, /BEGIN CERTIFICATE/);
