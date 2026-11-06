@@ -9,6 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { DomainError, centsToReais } from "../src/services/erp/domain.ts";
 import {
   ambienteNfse,
+  CODIGO_TRIBUTACAO_NACIONAL,
   codigoIbgeConhecido,
   competenciaEnviada,
   instanteBrasil,
@@ -324,7 +325,7 @@ function configPrestador(): {
     base: ambiente.base,
     ambiente: ambiente.ambiente,
     cnpj: (process.env.NFSE_CNPJ ?? "").trim(),
-    codigoServico: (process.env.NFSE_ITEM_SERVICO ?? "").trim(),
+    codigoServico: CODIGO_TRIBUTACAO_NACIONAL,
     serie,
     cMun: (process.env.NFSE_CODIGO_MUNICIPIO ?? "").trim(),
     chave: aberto.chave,

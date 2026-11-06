@@ -48,7 +48,7 @@ function pedido(parcial: Partial<PedidoNfse> = {}): PedidoNfse {
     cMunPrestador: "3548807",
     cnpjPrestador: "50516724000160",
     inscricaoMunicipal: "",
-    codigoServico: "010501",
+    codigoServico: "170101",
     serie: "1",
     numeroDps: "100000000000001",
     emitidoEm: "2026-11-06T08:00:00-03:00",
@@ -75,6 +75,8 @@ describe("emissão no Emissor Nacional", () => {
     assert.match(xml, /Consultoria mensal/);
     assert.match(xml, /19678493000141/);
     assert.match(xml, /<vServ>169\.00<\/vServ>/);
+    assert.match(xml, /<cTribNac>170101<\/cTribNac>/);
+    assert.match(montarDps(pedido({ codigoServico: "010601" })), /<cTribNac>170101<\/cTribNac>/);
     assert.match(xml, /<dhEmi>2026-11-06T08:00:00-03:00<\/dhEmi>/);
     assert.match(xml, /<dCompet>2026-11-06<\/dCompet>/);
     assert.doesNotMatch(montarDps(pedido({ inscricaoMunicipal: "12345678" })), /<IM>/);

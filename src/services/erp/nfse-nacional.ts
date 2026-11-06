@@ -3,6 +3,8 @@
 import { DomainError, MUNICIPIO_NFSE, assertData, centsToReais, competenciaDoVencimento, reaisToCents, somenteDigitos, type Cents } from "./domain.ts";
 
 export const CODIGO_MUNICIPIO_PRESTADOR = "3548807";
+/** 17.01.01 — assessoria ou consultoria, item que o município do prestador administra. */
+export const CODIGO_TRIBUTACAO_NACIONAL = "170101";
 export const ORIGEM_TITULO_NFSE = "Emissor Nacional";
 const HOSTS_SEFIN = ["sefin.nfse.gov.br", "sefin.producaorestrita.nfse.gov.br"] as const;
 
@@ -169,7 +171,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
   if (!/^\d{7}$/.test(input.cMunTomador)) throw new DomainError("Não foi possível identificar o município do cliente.");
   const cnpj = somenteDigitos(input.cnpjPrestador);
   if (cnpj.length !== 14) throw new DomainError("O CNPJ do prestador não está configurado.");
-  const codigoServico = somenteDigitos(input.codigoServico);
+  const codigoServico = CODIGO_TRIBUTACAO_NACIONAL;
   if (!/^\d{6}$/.test(codigoServico)) throw new DomainError("O item de serviço da NFS-e não está configurado.");
   const cMunPrestador = somenteDigitos(input.cMunPrestador);
   if (!/^\d{7}$/.test(cMunPrestador)) throw new DomainError("O município emissor da NFS-e não está configurado.");
