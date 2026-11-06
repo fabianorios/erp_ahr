@@ -615,12 +615,10 @@ async function baixarDanfse(chave: string, certificado: string, chavePrivada: st
     chavePrivada,
     { ...cabecalhosPortal("application/pdf,*/*;q=0.8"), cookie: cookies.join("; ") },
     true,
-    0,
-    true,
   );
   const pdf = pdfDanfse(baixado.corpo);
   if (pdf) return pdf;
-  tentativas.push({ url: urls.emissor, status: baixado.status });
+  tentativas.push({ url: baixado.url, status: baixado.status });
   throw new DomainError(falhaPdfDanfse(tentativas));
 }
 
@@ -636,7 +634,19 @@ function postarSefin(base: string, certificado: string, chave: string, dpsXmlGZi
   });
 }
 
-type RespostaHttp = { status: number; corpo: Buffer; cookies: string[]; location: string; jar: string[] };
+type RespostaHttp = { status: number; corpo: Buffer; cookies: string[]; location: string; jar: string[]; url: string };
+
+export function deveSeguirRedirecionamentoDanfse(status: number, location: string, atual: string): boolean {
+  if (status < 300 || status >= 400 || !location) return false;
+  let proxima: URL;
+  try {
+    proxima = new URL(location, atual);
+  } catch {
+    return false;
+  }
+  if (/\/Login(?:\/|$|\?)/i.test(proxima.pathname + proxima.search)) return false;
+  return proxima.protocol === "https:" && proxima.hostname.endsWith("nfse.gov.br");
+}
 
 function cabecalhosPortal(accept: string): Record<string, string> {
   return {
@@ -660,7 +670,6 @@ function httpsGet(
   headers: Record<string, string>,
   seguir = false,
   saltos = 0,
-  mesmoHost = false,
 ): Promise<RespostaHttp> {
   const alvo = new URL(url);
   return new Promise((resolve, reject) => {
@@ -693,15 +702,12 @@ function httpsGet(
           const status = res.statusCode ?? 0;
           const corpo = Buffer.concat(partes);
           const jar = juntarCookies(headers.cookie, cookies);
-          if (seguir && saltos < 5 && status >= 300 && status < 400 && location && !/\/Login/i.test(location)) {
+          if (seguir && saltos < 5 && deveSeguirRedirecionamentoDanfse(status, location, url)) {
             const proxima = new URL(location, url);
-            const hostPermitido = proxima.protocol === "https:" && proxima.hostname.endsWith("nfse.gov.br") && (!mesmoHost || proxima.hostname === alvo.hostname);
-            if (hostPermitido) {
-              resolve(httpsGet(proxima.toString(), certificado, chave, { ...headers, cookie: jar.join("; ") }, true, saltos + 1, mesmoHost));
-              return;
-            }
+            resolve(httpsGet(proxima.toString(), certificado, chave, { ...headers, cookie: jar.join("; ") }, true, saltos + 1));
+            return;
           }
-          resolve({ status, corpo, cookies, location, jar });
+          resolve({ status, corpo, cookies, location, jar, url });
         });
       },
     );
