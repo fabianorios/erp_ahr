@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import { createClient } from "@supabase/supabase-js";
 import { DomainError, adicionaisDeJson, agendaDeJson, formatBrl, htmlAdicionais, htmlAgenda, reaisToCents } from "../src/services/erp/domain.ts";
 import { executarAssinatura, executarAssinaturaPublica, propostaIdDaAssinatura } from "./assinaturas.ts";
-import { lerPdfDoTitulo } from "./boleto-cora.ts";
+import { lerPdfDoTitulo, tratarAvisoCora } from "./boleto-cora.ts";
+import { lerAvisoWebhook } from "../src/services/erp/cora.ts";
 import { executarGravacao } from "./gravacoes.ts";
 import { dataPropostaExtenso, docxParaPdf, preencherModeloDoDisco } from "./proposta-docx.ts";
 
@@ -145,6 +146,18 @@ const server = createServer((req, res) => {
   void (async () => {
     const url = req.url ?? "";
     const caminho = url.split("?")[0];
+    if (req.method === "POST" && caminho === "/api/cora/webhook") {
+      const aviso = lerAvisoWebhook(req.headers);
+      req.resume();
+      json(res, 200, { success: true });
+      if (aviso) {
+        void tratarAvisoCora(admin, aviso).catch((error) => {
+          const message = error instanceof Error ? error.message : "falha";
+          console.error(`Webhook Cora ${aviso.evento} ${aviso.faturaId}: ${message.replace(/\s+/g, " ").slice(0, 180)}`);
+        });
+      }
+      return;
+    }
     const pdfAssinatura = /^\/api\/assinar\/([A-Za-z0-9_-]{20,128})\/pdf$/.exec(caminho);
     if (req.method === "GET" && pdfAssinatura) {
       try {

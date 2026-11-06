@@ -5,11 +5,17 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { DomainError } from "../../src/services/erp/domain.ts";
 import {
+  chaveWebhook,
   decidirEmissao,
+  efeitoDoWebhook,
   ehPdf,
   executarEmissao,
+  gatilhosPendentes,
+  lerAvisoWebhook,
+  lerConsultaCora,
   lerFaturaCora,
   pedidoCora,
+  pedidoWebhook,
   urlsCora,
   type TituloParaCora,
 } from "../../src/services/erp/cora.ts";
@@ -25,6 +31,7 @@ function titulo(patch: Partial<TituloParaCora> = {}): TituloParaCora {
     valorCents: 150050,
     vencimento: "2026-11-20",
     descricao: "Consultoria DIRF",
+    numeroNf: null,
     clienteNome: "Vis Ltda",
     documento: "42976045000146",
     email: "financeiro@vis.com.br",
@@ -61,6 +68,8 @@ describe("pedido do boleto Cora", () => {
     const pedido = pedidoCora(titulo(), HOJE);
     assert.equal(pedido.code, TITULO);
     assert.equal(pedido.services[0].amount, 150050);
+    assert.equal(pedido.services[0].name, "Consultoria DIRF");
+    assert.equal(pedido.services[0].description, "Consultoria DIRF");
     assert.equal(pedido.payment_terms.due_date, "2026-11-20");
     assert.equal(pedido.customer.document.type, "CNPJ");
     assert.equal(pedido.customer.document.identity, "42976045000146");
@@ -91,6 +100,19 @@ describe("pedido do boleto Cora", () => {
   it("não cria outra fatura quando o título já tem id da Cora", () => {
     const decisao = decidirEmissao(titulo({ boleto: { id: "bol-1", coraId: "inv_pronta" } }), HOJE);
     assert.deepEqual(decisao, { tipo: "mostrar", boletoId: "bol-1" });
+  });
+
+  it("imprime a NF no nome e na descrição, e não inventa número", () => {
+    const comNf = pedidoCora(titulo({ numeroNf: " 4521 " }), HOJE);
+    assert.equal(comNf.services[0].name, "NF 4521 - Consultoria DIRF");
+    assert.equal(comNf.services[0].description, "NF 4521 - Consultoria DIRF");
+    const semNumero = pedidoCora(titulo({ numeroNf: "   " }), HOJE);
+    assert.equal(semNumero.services[0].description, "Consultoria DIRF");
+    const longa = pedidoCora(titulo({ numeroNf: "99", descricao: "A".repeat(120) }), HOJE);
+    assert.equal(longa.services[0].description.length, 100);
+    assert.equal(longa.services[0].description.startsWith("NF 99 - "), true);
+    assert.equal(longa.services[0].name.startsWith("NF 99 - "), true);
+    assert.ok(longa.services[0].name.length <= 60);
   });
 
   it("só aceita a base de produção", () => {
@@ -244,5 +266,73 @@ describe("PDF salvo", () => {
     assert.throws(() => lerFaturaCora({ ...FATURA, payment_options: { bank_slip: { ...FATURA.payment_options.bank_slip, url: "http://127.0.0.1/boleto.pdf" } } }), /PDF/);
     assert.equal(ehPdf(new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d])), true);
     assert.equal(ehPdf(new TextEncoder().encode("nao")), false);
+  });
+});
+
+describe("webhook da Cora", () => {
+  const base = {
+    boletoStatus: "aberto" as const,
+    tituloStatus: "faturado" as const,
+    meio: "boleto" as const,
+    totalPaidCents: 150050,
+    dataPagamento: "2026-11-06",
+  };
+
+  it("lê o aviso pelo cabeçalho e ignora corpo que não veio", () => {
+    assert.deepEqual(
+      lerAvisoWebhook({ "webhook-event-type": "invoice.paid", "webhook-resource-id": "inv_zXmtr2n0RpmIwdjfnNokhA" }),
+      { evento: "invoice.paid", faturaId: "inv_zXmtr2n0RpmIwdjfnNokhA" },
+    );
+    assert.equal(lerAvisoWebhook({ "webhook-event-type": "invoice.created", "webhook-resource-id": "inv_zXmtr2n0RpmIwdjfnNokhA" }), null);
+    assert.equal(lerAvisoWebhook({ "webhook-event-type": "invoice.paid", "webhook-resource-id": "nao" }), null);
+  });
+
+  it("baixa com o valor e a data da fatura paga, e não baixa de novo", () => {
+    const consulta = lerConsultaCora({
+      status: "PAID",
+      total_paid: 150050,
+      occurrence_date: "2026-11-06T02:30:00Z",
+      payments: [{ method: "PIX" }],
+    });
+    assert.equal(consulta.dataPagamento, "2026-11-05");
+    assert.equal(consulta.meio, "pix");
+    const baixa = efeitoDoWebhook({ ...base, evento: "invoice.paid", faturaStatus: "PAID", meio: "pix" });
+    assert.deepEqual(baixa, { tipo: "baixar", valorCents: 150050, data: "2026-11-06", meio: "pix", coraStatus: "PAID" });
+    assert.equal(efeitoDoWebhook({ ...base, evento: "invoice.paid", faturaStatus: "PAID", tituloStatus: "recebido" }).tipo, "ja_baixado");
+    assert.equal(efeitoDoWebhook({ ...base, evento: "invoice.paid", faturaStatus: "PAID", boletoStatus: "pago" }).tipo, "ja_baixado");
+    assert.equal(efeitoDoWebhook({ ...base, evento: "invoice.paid", faturaStatus: "OPEN" }).tipo, "ignorar");
+  });
+
+  it("cancela e atrasa sem baixar, e não desfaz um boleto pago", () => {
+    assert.deepEqual(efeitoDoWebhook({ ...base, evento: "invoice.canceled", faturaStatus: "CANCELLED" }), {
+      tipo: "status",
+      status: "cancelado",
+      coraStatus: "CANCELLED",
+    });
+    assert.deepEqual(efeitoDoWebhook({ ...base, evento: "invoice.overdue", faturaStatus: "LATE" }), {
+      tipo: "status",
+      status: "atrasado",
+      coraStatus: "LATE",
+    });
+    assert.equal(efeitoDoWebhook({ ...base, evento: "invoice.overdue", faturaStatus: "LATE", boletoStatus: "atrasado" }).tipo, "ignorar");
+    assert.equal(efeitoDoWebhook({ ...base, evento: "invoice.canceled", faturaStatus: "CANCELLED", boletoStatus: "pago" }).tipo, "ignorar");
+    assert.equal(efeitoDoWebhook({ ...base, evento: "invoice.canceled", faturaStatus: "OPEN" }).tipo, "ignorar");
+  });
+
+  it("cadastra um endpoint por trigger e pula o que já aponta para o ERP", () => {
+    assert.deepEqual(gatilhosPendentes([]), ["paid", "canceled", "overdue"]);
+    const pedido = pedidoWebhook("paid");
+    assert.equal(pedido.resource, "invoice");
+    assert.equal(pedido.trigger, "paid");
+    assert.equal(pedido.url, "https://erpahr.ahrbrasil.com.br/api/cora/webhook");
+    assert.equal(chaveWebhook("canceled"), chaveWebhook("canceled"));
+    assert.notEqual(chaveWebhook("paid"), chaveWebhook("overdue"));
+    assert.deepEqual(
+      gatilhosPendentes([
+        { id: "end_1", url: pedido.url, resource: "invoice", trigger: "paid", active: true },
+        { id: "end_2", url: `${pedido.url}/`, resource: "invoice", trigger: "*", active: true },
+      ]),
+      [],
+    );
   });
 });

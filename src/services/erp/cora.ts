@@ -22,6 +22,7 @@ export type TituloParaCora = {
   valorCents: number;
   vencimento: string;
   descricao: string;
+  numeroNf: string | null;
   clienteNome: string;
   documento: string;
   email: string | null;
@@ -100,9 +101,9 @@ export function validarBaseCora(base: string): string {
   return limpa;
 }
 
-export function urlsCora(base: string): { token: string; invoices: string } {
+export function urlsCora(base: string): { token: string; invoices: string; endpoints: string } {
   const limpa = validarBaseCora(base);
-  return { token: `${limpa}/token`, invoices: `${limpa}/v2/invoices` };
+  return { token: `${limpa}/token`, invoices: `${limpa}/v2/invoices`, endpoints: `${limpa}/endpoints` };
 }
 
 export function decidirEmissao(titulo: TituloParaCora, hoje: string): DecisaoEmissao {
@@ -148,7 +149,8 @@ export function pedidoCora(titulo: TituloParaCora, hoje: string): PedidoCora {
 
   const email = emailCora(titulo.email);
   const address = enderecoCora(titulo.endereco);
-  const descricao = cortar(titulo.descricao, 100);
+  const nome = textoCobrancaCora(titulo.descricao, titulo.numeroNf, 60);
+  const descricao = textoCobrancaCora(titulo.descricao, titulo.numeroNf, 100);
   return {
     code: titulo.id,
     customer: {
@@ -157,7 +159,7 @@ export function pedidoCora(titulo: TituloParaCora, hoje: string): PedidoCora {
       document: { identity: documento, type: documento.length === 14 ? "CNPJ" : "CPF" },
       ...(address ? { address } : {}),
     },
-    services: [{ name: cortar(titulo.descricao, 60), description: descricao, amount: titulo.valorCents }],
+    services: [{ name: nome, description: descricao, amount: titulo.valorCents }],
     payment_terms: { due_date: vencimento },
     payment_forms: ["BANK_SLIP", "PIX"],
   };
@@ -201,6 +203,121 @@ export function ehPdf(bytes: Uint8Array): boolean {
 export function nomeArquivoPdf(tituloId: string): string {
   if (!UUID.test(tituloId)) throw new DomainError("Título inválido.");
   return `${tituloId.toLowerCase()}.pdf`;
+}
+
+/** O que a Cora imprime no boleto: nome da cobrança e descrição do serviço. */
+export function textoCobrancaCora(descricao: string, numeroNf: string | null | undefined, max: number): string {
+  const base = descricao.trim();
+  const nf = (numeroNf ?? "").trim();
+  if (!nf) return base.slice(0, max);
+  return `NF ${nf} - ${base}`.slice(0, max);
+}
+
+export const URL_WEBHOOK_CORA = "https://erpahr.ahrbrasil.com.br/api/cora/webhook";
+export const GATILHOS_WEBHOOK_CORA = ["paid", "canceled", "overdue"] as const;
+export type GatilhoWebhook = (typeof GATILHOS_WEBHOOK_CORA)[number];
+
+const EVENTOS_WEBHOOK = ["invoice.paid", "invoice.canceled", "invoice.overdue"] as const;
+export type EventoWebhook = (typeof EVENTOS_WEBHOOK)[number];
+export type AvisoCora = { evento: EventoWebhook; faturaId: string };
+
+const ID_FATURA = /^inv_[A-Za-z0-9_-]{8,80}$/;
+const CHAVES_WEBHOOK: Record<GatilhoWebhook, string> = {
+  paid: "8f3c1a2e-6b47-4d11-9c2e-0a7b6c5d4e31",
+  canceled: "1c9e4b70-2a58-4f63-8d14-7e6a5b4c3d20",
+  overdue: "5a2d8e91-3c74-4b08-a6f2-9d1e0c8b7a64",
+};
+
+export function lerAvisoWebhook(headers: { get(name: string): string | null } | Record<string, string | string[] | undefined>): AvisoCora | null {
+  const tipo = valorHeader(headers, "webhook-event-type").toLowerCase();
+  const id = valorHeader(headers, "webhook-resource-id");
+  if (!(EVENTOS_WEBHOOK as readonly string[]).includes(tipo) || !ID_FATURA.test(id)) return null;
+  return { evento: tipo as EventoWebhook, faturaId: id };
+}
+
+export type ConsultaCora = {
+  status: string;
+  totalPaidCents: number;
+  dataPagamento: string | null;
+  meio: "boleto" | "pix";
+};
+
+export function lerConsultaCora(bruto: unknown): ConsultaCora {
+  const json = objeto(bruto);
+  if (!json) throw new DomainError("A Cora devolveu uma resposta inválida.");
+  const status = texto(json.status).toUpperCase();
+  if (!status) throw new DomainError("A Cora não devolveu o status da fatura.");
+  const total = json.total_paid;
+  const totalPaidCents = typeof total === "number" && Number.isInteger(total) && total >= 0 ? total : 0;
+  return {
+    status,
+    totalPaidCents,
+    dataPagamento: dataSolta(json.occurrence_date) ?? dataDosPagamentos(json.payments),
+    meio: meioDoPagamento(json.payments),
+  };
+}
+
+export type EfeitoWebhook =
+  | { tipo: "ignorar" }
+  | { tipo: "ja_baixado" }
+  | { tipo: "baixar"; valorCents: number; data: string; meio: "boleto" | "pix"; coraStatus: "PAID" }
+  | { tipo: "status"; status: "cancelado" | "atrasado"; coraStatus: "CANCELLED" | "LATE" };
+
+export function efeitoDoWebhook(input: {
+  evento: EventoWebhook;
+  faturaStatus: string;
+  totalPaidCents: number;
+  dataPagamento: string | null;
+  meio: "boleto" | "pix";
+  boletoStatus: "aberto" | "atrasado" | "pago" | "cancelado";
+  tituloStatus: TituloStatus;
+}): EfeitoWebhook {
+  const fatura = input.faturaStatus.toUpperCase();
+  const jaRecebido = input.tituloStatus === "recebido" || input.boletoStatus === "pago";
+  if (input.evento === "invoice.paid") {
+    if (jaRecebido) return { tipo: "ja_baixado" };
+    if (fatura !== "PAID") return { tipo: "ignorar" };
+    if (input.boletoStatus !== "aberto" && input.boletoStatus !== "atrasado") return { tipo: "ignorar" };
+    if (input.tituloStatus !== "faturado") return { tipo: "ignorar" };
+    if (!Number.isInteger(input.totalPaidCents) || input.totalPaidCents <= 0 || !input.dataPagamento) return { tipo: "ignorar" };
+    return { tipo: "baixar", valorCents: input.totalPaidCents, data: input.dataPagamento, meio: input.meio, coraStatus: "PAID" };
+  }
+  if (jaRecebido || input.boletoStatus === "cancelado") return { tipo: "ignorar" };
+  if (input.evento === "invoice.canceled") {
+    if (fatura !== "CANCELLED" && fatura !== "CANCELED") return { tipo: "ignorar" };
+    if (input.boletoStatus !== "aberto" && input.boletoStatus !== "atrasado") return { tipo: "ignorar" };
+    return { tipo: "status", status: "cancelado", coraStatus: "CANCELLED" };
+  }
+  if (fatura !== "LATE" || input.boletoStatus !== "aberto") return { tipo: "ignorar" };
+  return { tipo: "status", status: "atrasado", coraStatus: "LATE" };
+}
+
+export type EndpointCora = { id: string; url: string; resource: string; trigger: string; active: boolean };
+
+export function lerEndpointsCora(bruto: unknown): EndpointCora[] {
+  if (!Array.isArray(bruto)) return [];
+  return bruto.flatMap((item) => {
+    const json = objeto(item);
+    if (!json) return [];
+    const id = texto(json.id);
+    const url = texto(json.url);
+    const resource = texto(json.resource);
+    const trigger = texto(json.trigger);
+    if (!id || !url || !resource || !trigger) return [];
+    return [{ id, url, resource, trigger, active: json.active !== false }];
+  });
+}
+
+export function gatilhosPendentes(existentes: EndpointCora[]): GatilhoWebhook[] {
+  return GATILHOS_WEBHOOK_CORA.filter((trigger) => !endpointCobre(existentes, trigger));
+}
+
+export function chaveWebhook(trigger: GatilhoWebhook): string {
+  return CHAVES_WEBHOOK[trigger];
+}
+
+export function pedidoWebhook(trigger: GatilhoWebhook): { url: string; resource: "invoice"; trigger: GatilhoWebhook } {
+  return { url: URL_WEBHOOK_CORA, resource: "invoice", trigger };
 }
 
 export function assuntoBoleto(descricao: string): string {
@@ -292,6 +409,60 @@ function enderecoCora(endereco: EnderecoCora | null): PedidoCora["customer"]["ad
 
 function cortar(valor: string, max: number): string {
   return valor.trim().slice(0, max);
+}
+
+function valorHeader(headers: { get(name: string): string | null } | Record<string, string | string[] | undefined>, nome: string): string {
+  if ("get" in headers && typeof headers.get === "function") return (headers.get(nome) ?? "").trim();
+  const mapa = headers as Record<string, string | string[] | undefined>;
+  const bruto = mapa[nome] ?? mapa[nome.toLowerCase()];
+  const valor = Array.isArray(bruto) ? bruto[0] : bruto;
+  return (valor ?? "").trim();
+}
+
+function dataSolta(valor: unknown): string | null {
+  const bruto = texto(valor);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(bruto)) return bruto;
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(bruto)) return null;
+  const data = new Date(bruto);
+  if (Number.isNaN(data.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(data);
+}
+
+function dataDosPagamentos(valor: unknown): string | null {
+  if (!Array.isArray(valor)) return null;
+  for (const item of valor) {
+    const pagamento = objeto(item);
+    if (!pagamento) continue;
+    const data = dataSolta(pagamento.finalized_at) ?? dataSolta(pagamento.paid_at) ?? dataSolta(pagamento.date);
+    if (data) return data;
+  }
+  return null;
+}
+
+function meioDoPagamento(valor: unknown): "boleto" | "pix" {
+  if (!Array.isArray(valor)) return "boleto";
+  for (const item of valor) {
+    const pagamento = objeto(item);
+    if (!pagamento) continue;
+    const method = `${texto(pagamento.method)} ${texto(pagamento.type)} ${texto(pagamento.payment_form)}`.toUpperCase();
+    if (method.includes("PIX")) return "pix";
+  }
+  return "boleto";
+}
+
+function endpointCobre(existentes: EndpointCora[], trigger: GatilhoWebhook): boolean {
+  return existentes.some(
+    (item) =>
+      item.active &&
+      item.resource === "invoice" &&
+      item.url.replace(/\/+$/, "") === URL_WEBHOOK_CORA &&
+      (item.trigger === trigger || item.trigger === "*"),
+  );
 }
 
 function texto(valor: unknown): string {

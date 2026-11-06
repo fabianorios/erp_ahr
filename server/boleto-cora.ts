@@ -4,19 +4,28 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
 import { resolve, sep } from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { DomainError, centsToReais, formatBrl, reaisToCents } from "../src/services/erp/domain.ts";
+import { DomainError, centsToReais, formatBrl, reaisToCents, type TituloStatus } from "../src/services/erp/domain.ts";
 import { ordenarContatos, validarEmailAssinatura } from "../src/services/erp/assinatura.ts";
 import {
   assuntoBoleto,
+  chaveWebhook,
+  efeitoDoWebhook,
   ehPdf,
   executarEmissao,
+  gatilhosPendentes,
   hojeBrasil,
+  lerConsultaCora,
+  lerEndpointsCora,
   nomeArquivoPdf,
+  pedidoWebhook,
   textoEmailBoleto,
+  URL_WEBHOOK_CORA,
   urlPdfCora,
   urlsCora,
   validarBaseCora,
+  type AvisoCora,
   type BoletoInserir,
+  type EndpointCora,
   type PedidoCora,
   type TituloParaCora,
 } from "../src/services/erp/cora.ts";
@@ -155,7 +164,7 @@ async function tituloParaCora(db: Banco, tituloId: string): Promise<TituloParaCo
   if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
   const { data, error } = await db
     .from("erp_contas_receber")
-    .select("id, status, valor, vencimento, descricao, cliente_id, erp_boletos(id, cora_invoice_id)")
+    .select("id, status, valor, vencimento, descricao, numero_nf, cliente_id, erp_boletos(id, cora_invoice_id)")
     .eq("id", tituloId)
     .maybeSingle();
   if (error) throw new DomainError("Não foi possível ler o título.");
@@ -178,6 +187,7 @@ async function tituloParaCora(db: Banco, tituloId: string): Promise<TituloParaCo
     valorCents: reaisToCents(data.valor as string | number),
     vencimento: String(data.vencimento ?? "").slice(0, 10),
     descricao: String(data.descricao ?? ""),
+    numeroNf: typeof data.numero_nf === "string" ? data.numero_nf : null,
     clienteNome: String(cliente.name ?? ""),
     documento: String(cliente.document ?? ""),
     email: typeof cliente.email === "string" ? cliente.email : null,
@@ -277,9 +287,8 @@ function configCora(): ConfigCora {
 
 async function emitirNaCora(pedido: PedidoCora, idempotencyKey: string): Promise<unknown> {
   const cfg = configCora();
-  const token = await tokenCora(cfg);
   const body = JSON.stringify(pedido);
-  const enviar = (acesso: string) =>
+  const resposta = await comToken(cfg, (acesso) =>
     httpsComCert({
       url: urlsCora(cfg.base).invoices,
       method: "POST",
@@ -294,18 +303,187 @@ async function emitirNaCora(pedido: PedidoCora, idempotencyKey: string): Promise
       cert: cfg.cert,
       key: cfg.key,
       limite: 2_000_000,
-    });
-  let resposta = await enviar(token);
-  if (resposta.status === 401) {
-    cacheToken = null;
-    resposta = await enviar(await tokenCora(cfg));
-  }
+    }),
+  );
   if (resposta.status < 200 || resposta.status >= 300) throw new DomainError(mensagemCora(resposta.status, resposta.texto));
   try {
     return JSON.parse(resposta.texto) as unknown;
   } catch {
     throw new DomainError("A Cora devolveu uma resposta inválida.");
   }
+}
+
+export async function tratarAvisoCora(db: Banco, aviso: AvisoCora): Promise<void> {
+  await garantirColunas(db);
+  const { data: boleto, error } = await db
+    .from("erp_boletos")
+    .select("id, status, conta_receber_id, cora_status")
+    .eq("cora_invoice_id", aviso.faturaId)
+    .maybeSingle();
+  if (colunaAusente(error)) throw new DomainError(MENSAGEM_SQL);
+  if (error) throw new DomainError("Não foi possível ler o boleto.");
+  if (!boleto?.id || !boleto.conta_receber_id) return;
+  const boletoStatus = statusBoleto(boleto.status);
+  if (!boletoStatus) return;
+  const { data: titulo, error: erroTitulo } = await db.from("erp_contas_receber").select("status").eq("id", boleto.conta_receber_id).maybeSingle();
+  if (erroTitulo || !titulo) throw new DomainError("Não foi possível ler o título.");
+  const tituloStatus = statusTitulo(titulo.status);
+  if (!tituloStatus) return;
+  if (aviso.evento === "invoice.paid" && boletoStatus === "pago") {
+    await marcarStatusCora(db, String(boleto.id), "PAID");
+    return;
+  }
+  if (aviso.evento === "invoice.canceled" && boletoStatus === "cancelado") return;
+  if (aviso.evento === "invoice.overdue" && boletoStatus !== "aberto") return;
+  const consulta = lerConsultaCora(await consultarFaturaCora(aviso.faturaId));
+  const efeito = efeitoDoWebhook({
+    evento: aviso.evento,
+    faturaStatus: consulta.status,
+    totalPaidCents: consulta.totalPaidCents,
+    dataPagamento: consulta.dataPagamento,
+    meio: consulta.meio,
+    boletoStatus,
+    tituloStatus,
+  });
+  if (efeito.tipo === "ja_baixado") {
+    await marcarStatusCora(db, String(boleto.id), "PAID");
+    return;
+  }
+  if (efeito.tipo === "ignorar") return;
+  if (efeito.tipo === "status") {
+    const { error: gravacao } = await db
+      .from("erp_boletos")
+      .update({ status: efeito.status, cora_status: efeito.coraStatus })
+      .eq("id", boleto.id)
+      .in("status", ["aberto", "atrasado"]);
+    if (colunaAusente(gravacao)) throw new DomainError(MENSAGEM_SQL);
+    if (gravacao) throw new DomainError(textoErro(gravacao));
+    return;
+  }
+  const { error: baixa } = await db.rpc("erp_pagar_boleto", {
+    p_boleto_id: boleto.id,
+    p_data: efeito.data,
+    p_valor_recebido: Number(centsToReais(efeito.valorCents)),
+    p_meio: efeito.meio,
+  });
+  if (baixa) {
+    const { data: atual } = await db.from("erp_contas_receber").select("status").eq("id", boleto.conta_receber_id).maybeSingle();
+    if (atual?.status === "recebido") return;
+    throw new DomainError(textoErro(baixa));
+  }
+  await marcarStatusCora(db, String(boleto.id), "PAID");
+}
+
+export async function registrarWebhooksCora(): Promise<{ trigger: string; acao: "existente" | "criado"; id: string }[]> {
+  const cfg = configCora();
+  const lista = await comToken(cfg, (acesso) =>
+    httpsComCert({
+      url: urlsCora(cfg.base).endpoints,
+      method: "GET",
+      headers: { Authorization: `Bearer ${acesso}`, Accept: "application/json" },
+      cert: cfg.cert,
+      key: cfg.key,
+      limite: 2_000_000,
+    }),
+  );
+  if (lista.status < 200 || lista.status >= 300) throw new DomainError(mensagemCora(lista.status, lista.texto));
+  let existentes: EndpointCora[] = [];
+  try {
+    existentes = lerEndpointsCora(JSON.parse(lista.texto) as unknown);
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    throw new DomainError("A Cora devolveu uma resposta inválida.");
+  }
+  const pendentes = new Set(gatilhosPendentes(existentes));
+  const resultado: { trigger: string; acao: "existente" | "criado"; id: string }[] = [];
+  for (const trigger of ["paid", "canceled", "overdue"] as const) {
+    if (!pendentes.has(trigger)) {
+      const achou = existentes.find(
+        (item) =>
+          item.active &&
+          item.resource === "invoice" &&
+          item.url.replace(/\/+$/, "") === URL_WEBHOOK_CORA &&
+          (item.trigger === trigger || item.trigger === "*"),
+      );
+      resultado.push({ trigger, acao: "existente", id: achou?.id ?? "" });
+      continue;
+    }
+    const body = JSON.stringify(pedidoWebhook(trigger));
+    const criado = await comToken(cfg, (acesso) =>
+      httpsComCert({
+        url: urlsCora(cfg.base).endpoints,
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${acesso}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "Idempotency-Key": chaveWebhook(trigger),
+          "Content-Length": String(Buffer.byteLength(body)),
+        },
+        body,
+        cert: cfg.cert,
+        key: cfg.key,
+        limite: 200_000,
+      }),
+    );
+    if (criado.status < 200 || criado.status >= 300) throw new DomainError(mensagemCora(criado.status, criado.texto));
+    let id = "";
+    try {
+      const json = JSON.parse(criado.texto) as { id?: unknown };
+      id = typeof json.id === "string" ? json.id : "";
+    } catch {
+      id = "";
+    }
+    resultado.push({ trigger, acao: "criado", id });
+  }
+  return resultado;
+}
+
+async function consultarFaturaCora(faturaId: string): Promise<unknown> {
+  const cfg = configCora();
+  const resposta = await comToken(cfg, (acesso) =>
+    httpsComCert({
+      url: `${urlsCora(cfg.base).invoices}/${faturaId}`,
+      method: "GET",
+      headers: { Authorization: `Bearer ${acesso}`, Accept: "application/json" },
+      cert: cfg.cert,
+      key: cfg.key,
+      limite: 2_000_000,
+    }),
+  );
+  if (resposta.status < 200 || resposta.status >= 300) {
+    throw new DomainError(resposta.status === 401 || resposta.status === 403 ? "A Cora recusou o certificado ou o token." : "Não foi possível consultar a fatura na Cora.");
+  }
+  try {
+    return JSON.parse(resposta.texto) as unknown;
+  } catch {
+    throw new DomainError("A Cora devolveu uma resposta inválida.");
+  }
+}
+
+async function comToken(cfg: ConfigCora, acao: (acesso: string) => Promise<{ status: number; texto: string }>): Promise<{ status: number; texto: string }> {
+  let resposta = await acao(await tokenCora(cfg));
+  if (resposta.status === 401) {
+    cacheToken = null;
+    resposta = await acao(await tokenCora(cfg));
+  }
+  return resposta;
+}
+
+async function marcarStatusCora(db: Banco, boletoId: string, coraStatus: string): Promise<void> {
+  const { error } = await db.from("erp_boletos").update({ cora_status: coraStatus }).eq("id", boletoId);
+  if (colunaAusente(error)) throw new DomainError(MENSAGEM_SQL);
+  if (error) throw new DomainError(textoErro(error));
+}
+
+function statusBoleto(valor: unknown): "aberto" | "atrasado" | "pago" | "cancelado" | null {
+  if (valor === "aberto" || valor === "atrasado" || valor === "pago" || valor === "cancelado") return valor;
+  return null;
+}
+
+function statusTitulo(valor: unknown): TituloStatus | null {
+  if (valor === "previsto" || valor === "faturado" || valor === "recebido" || valor === "cancelado") return valor;
+  return null;
 }
 
 async function tokenCora(cfg: ConfigCora): Promise<string> {
@@ -366,7 +544,7 @@ function httpsComCert(opcoes: {
   url: string;
   method: string;
   headers: Record<string, string>;
-  body: string;
+  body?: string;
   cert: Buffer;
   key: Buffer;
   limite: number;
@@ -407,7 +585,7 @@ function httpsComCert(opcoes: {
       reject(new DomainError("A Cora não respondeu."));
     });
     req.on("error", () => reject(new DomainError("Não foi possível falar com a Cora.")));
-    req.write(opcoes.body);
+    if (opcoes.body) req.write(opcoes.body);
     req.end();
   });
 }
