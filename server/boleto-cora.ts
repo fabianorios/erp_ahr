@@ -12,6 +12,7 @@ import {
   efeitoDoWebhook,
   ehPdf,
   executarCancelamento,
+  executarEnvioKit,
   executarEmissao,
   executarVencimento,
   gatilhosPendentes,
@@ -49,10 +50,14 @@ export function diretorioBoletos(): string {
 }
 
 export function caminhoPdf(dir: string, tituloId: string): string {
-  const nome = nomeArquivoPdf(tituloId);
+  return caminhoPdfNome(dir, nomeArquivoPdf(tituloId));
+}
+
+export function caminhoPdfNome(dir: string, nome: string): string {
+  if (!/^[A-Za-z0-9._-]{1,120}\.pdf$/i.test(nome)) throw new DomainError("O PDF não está no servidor.");
   const base = resolve(dir);
   const arquivo = resolve(base, nome);
-  if (arquivo !== `${base}${sep}${nome}`) throw new DomainError("O PDF deste boleto não está no servidor.");
+  if (arquivo !== `${base}${sep}${nome}`) throw new DomainError("O PDF não está no servidor.");
   return arquivo;
 }
 
@@ -70,14 +75,30 @@ export async function gravarPdfEm(dir: string, tituloId: string, pdf: Uint8Array
   }
 }
 
-export async function lerPdfEm(dir: string, tituloId: string): Promise<Buffer> {
-  const caminho = caminhoPdf(dir, tituloId);
+export function diretorioNfse(): string {
+  const configurado = process.env.NFSE_PDF_DIR?.trim();
+  return configurado || "/var/www/erpahr/secrets/nfse";
+}
+
+export async function lerPdfNome(dir: string, nome: string): Promise<Buffer> {
+  const caminho = caminhoPdfNome(dir, nome);
   try {
     const bytes = await readFile(caminho);
-    if (!ehPdf(bytes)) throw new DomainError("O PDF deste boleto não está no servidor.");
+    if (!ehPdf(bytes)) throw new DomainError("O PDF não está no servidor.");
     return bytes;
   } catch (error) {
     if (error instanceof DomainError) throw error;
+    throw new DomainError("O PDF não está no servidor.");
+  }
+}
+
+export async function lerPdfEm(dir: string, tituloId: string): Promise<Buffer> {
+  try {
+    const bytes = await readFile(caminhoPdf(dir, tituloId));
+    if (!ehPdf(bytes)) throw new DomainError("O PDF deste boleto não está no servidor.");
+    return bytes;
+  } catch (error) {
+    if (error instanceof DomainError && error.message !== "O PDF não está no servidor.") throw error;
     throw new DomainError("O PDF deste boleto não está no servidor.");
   }
 }
@@ -150,6 +171,40 @@ export async function enviarBoletoDoTitulo(db: Banco, tituloId: string, contatoI
   if (ok.length === 0) throw new DomainError(`Não foi possível enviar o boleto para ${falhas.join("; ")}.`);
   if (falhas.length) return { aviso: `Boleto enviado para ${ok.join(", ")}. Não foi possível enviar para ${falhas.join("; ")}.` };
   return { aviso: `Boleto enviado para ${ok.join(", ")}.` };
+}
+
+export async function situacaoKit(db: Banco, tituloId: string): Promise<{ nfse: boolean; boleto: boolean }> {
+  if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
+  const [nfse, boleto] = await Promise.all([pdfNfseDoTitulo(db, tituloId), pdfBoletoSalvo(db, tituloId)]);
+  return { nfse: Boolean(nfse), boleto: Boolean(boleto) };
+}
+
+export async function enviarKitDoTitulo(db: Banco, tituloId: string, contatoIds: unknown): Promise<{ aviso: string }> {
+  const ids = ordenarContatos(contatoIds);
+  if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
+  const { data, error } = await db.from("erp_contas_receber").select("descricao, valor, vencimento, cliente_id").eq("id", tituloId).maybeSingle();
+  if (error || !data?.cliente_id) throw new DomainError("Falta o cliente do título.");
+  const nfse = await pdfNfseDoTitulo(db, tituloId);
+  const boleto = await pdfBoletoSalvo(db, tituloId);
+  const contatos = await contatosDoCliente(db, String(data.cliente_id), ids);
+  const aviso = await executarEnvioKit({
+    nfseInformada: Boolean(nfse),
+    numeroNf: nfse?.numero ?? "",
+    pdfNfse: nfse?.pdf ?? null,
+    pdfBoleto: boleto,
+    descricao: String(data.descricao ?? ""),
+    valor: formatBrl(reaisToCents(data.valor as string | number)),
+    vencimento: dataBr(String(data.vencimento ?? "")),
+    contatos,
+    enviar: (mensagem) =>
+      enviarEmail({
+        para: mensagem.para,
+        assunto: mensagem.assunto,
+        texto: mensagem.texto,
+        anexos: mensagem.anexos.map((anexo) => ({ nome: anexo.nome, tipo: anexo.tipo, bytes: Buffer.from(anexo.bytes) })),
+      }),
+  });
+  return { aviso };
 }
 
 export async function alterarVencimentoDoTitulo(db: Banco, tituloId: string, data: string): Promise<{ aviso: string }> {
@@ -296,6 +351,53 @@ async function contatosDoCliente(db: Banco, clienteId: string, ids: string[]): P
       email: validarEmailAssinatura(String(contato.email ?? ""), "O contato não tem e-mail.", "E-mail do contato inválido."),
     };
   });
+}
+
+async function linhaNfse(db: Banco, tituloId: string): Promise<{ status: string; numero: string; pdfPath: string | null } | null> {
+  const comCaminho = await db.from("erp_nfse").select("status, numero, pdf_path").eq("conta_receber_id", tituloId).maybeSingle();
+  if (comCaminho.error && /pdf_path/i.test(comCaminho.error.message ?? "")) {
+    const semCaminho = await db.from("erp_nfse").select("status, numero").eq("conta_receber_id", tituloId).maybeSingle();
+    if (semCaminho.error || !semCaminho.data) return null;
+    return { status: String(semCaminho.data.status ?? ""), numero: String(semCaminho.data.numero ?? ""), pdfPath: null };
+  }
+  if (comCaminho.error || !comCaminho.data) return null;
+  return {
+    status: String(comCaminho.data.status ?? ""),
+    numero: String(comCaminho.data.numero ?? ""),
+    pdfPath: typeof comCaminho.data.pdf_path === "string" ? comCaminho.data.pdf_path : null,
+  };
+}
+
+function nomePdfNfseNoDisco(pdfPath: string | null, tituloId: string): string {
+  const informado = pdfPath?.split(/[/\\]/).pop()?.trim() ?? "";
+  if (/^[A-Za-z0-9._-]{1,120}\.pdf$/i.test(informado)) return informado;
+  return nomeArquivoPdf(tituloId);
+}
+
+async function pdfNfseDoTitulo(db: Banco, tituloId: string): Promise<{ numero: string; pdf: Buffer } | null> {
+  const nota = await linhaNfse(db, tituloId);
+  if (!nota || nota.status !== "informada" || !nota.numero.trim()) return null;
+  const nomes = [nomePdfNfseNoDisco(nota.pdfPath, tituloId)];
+  const padrao = nomeArquivoPdf(tituloId);
+  if (!nomes.includes(padrao)) nomes.push(padrao);
+  for (const nome of nomes) {
+    try {
+      return { numero: nota.numero.trim(), pdf: await lerPdfNome(diretorioNfse(), nome) };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function pdfBoletoSalvo(db: Banco, tituloId: string): Promise<Buffer | null> {
+  const { data, error } = await db.from("erp_boletos").select("pdf_path, cora_invoice_id").eq("conta_receber_id", tituloId).maybeSingle();
+  if (error || !data?.pdf_path || !data.cora_invoice_id) return null;
+  try {
+    return await lerPdfEm(diretorioBoletos(), tituloId);
+  } catch {
+    return null;
+  }
 }
 
 async function exigirRotinaVencimento(db: Banco): Promise<void> {

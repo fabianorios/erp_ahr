@@ -47,7 +47,7 @@ import {
   type PropostaStatus,
 } from "../src/services/erp/domain.ts";
 import { validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
-import { alterarVencimentoDoTitulo, cancelarBoletoDoTitulo, emitirBoletoDoTitulo, enviarBoletoDoTitulo } from "./boleto-cora.ts";
+import { alterarVencimentoDoTitulo, cancelarBoletoDoTitulo, emitirBoletoDoTitulo, enviarBoletoDoTitulo, enviarKitDoTitulo } from "./boleto-cora.ts";
 
 type Banco = SupabaseClient;
 
@@ -207,6 +207,8 @@ export async function executarGravacao(
       return alterarVencimentoDoTitulo(db, idDe(dados.tituloId, "Título"), texto(dados, "vencimento"));
     case "boleto.cancelar":
       return cancelarBoletoDoTitulo(db, idDe(dados.tituloId, "Título"));
+    case "kit.enviar":
+      return enviarKitDoTitulo(db, idDe(dados.tituloId, "Título"), dados.contatoIds);
     case "titulo.baixa":
       return baixaTitulo(db, dados);
     default:

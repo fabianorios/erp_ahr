@@ -126,34 +126,44 @@ function htmlDe(texto: string): string {
   return `<div style="font-family:sans-serif;font-size:14px;line-height:1.5">${corpo}</div>`;
 }
 
-export async function enviarEmail(input: {
-  para: string;
-  assunto: string;
-  texto: string;
-  anexo?: { nome: string; tipo: string; bytes: Buffer };
-}): Promise<void> {
-  const config = configGraph();
-  const payload = {
+export type AnexoEmail = { nome: string; tipo: string; bytes: Buffer };
+
+export function montarGraph(
+  config: { fromEmail: string; fromName: string },
+  input: { para: string | string[]; assunto: string; texto: string; anexo?: AnexoEmail; anexos?: AnexoEmail[] },
+) {
+  const para = (Array.isArray(input.para) ? input.para : [input.para]).map((email) => email.trim()).filter(Boolean);
+  const anexos = [...(input.anexos ?? []), ...(input.anexo ? [input.anexo] : [])];
+  return {
     message: {
       subject: input.assunto,
       body: { contentType: "HTML", content: htmlDe(input.texto) },
-      toRecipients: [{ emailAddress: { address: input.para } }],
+      toRecipients: para.map((address) => ({ emailAddress: { address } })),
       from: { emailAddress: { address: config.fromEmail, name: config.fromName } },
-      ...(input.anexo
+      ...(anexos.length
         ? {
-            attachments: [
-              {
-                "@odata.type": "#microsoft.graph.fileAttachment",
-                name: input.anexo.nome,
-                contentType: input.anexo.tipo,
-                contentBytes: input.anexo.bytes.toString("base64"),
-              },
-            ],
+            attachments: anexos.map((anexo) => ({
+              "@odata.type": "#microsoft.graph.fileAttachment",
+              name: anexo.nome,
+              contentType: anexo.tipo,
+              contentBytes: anexo.bytes.toString("base64"),
+            })),
           }
         : {}),
     },
     saveToSentItems: true,
   };
+}
+
+export async function enviarEmail(input: {
+  para: string | string[];
+  assunto: string;
+  texto: string;
+  anexo?: AnexoEmail;
+  anexos?: AnexoEmail[];
+}): Promise<void> {
+  const config = configGraph();
+  const payload = montarGraph(config, input);
   const postar = (token: string) =>
     fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.fromEmail)}/sendMail`, {
       method: "POST",

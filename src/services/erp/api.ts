@@ -931,6 +931,26 @@ export async function emitirBoletoCora(tituloId: string): Promise<string | undef
   return corpo.aviso;
 }
 
+async function comSessao(caminho: string): Promise<Response> {
+  if (!supabase) throw new DomainError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente deste ERP.");
+  const sessao = await supabase.auth.getSession();
+  const token = sessao.data.session?.access_token;
+  if (!token) throw new DomainError("Entre de novo.");
+  return fetch(caminho, { headers: { Authorization: `Bearer ${token}` } });
+}
+
+export async function consultarKit(tituloId: string): Promise<{ nfse: boolean; boleto: boolean }> {
+  const resposta = await comSessao(`/api/titulos/${tituloId}/kit`);
+  const corpo = (await resposta.json().catch(() => ({}))) as { message?: string; nfse?: boolean; boleto?: boolean };
+  if (!resposta.ok) throw new DomainError(corpo.message ?? "Não foi possível ver o kit.");
+  return { nfse: Boolean(corpo.nfse), boleto: Boolean(corpo.boleto) };
+}
+
+export async function enviarKit(tituloId: string, contatoIds: string[]): Promise<string | undefined> {
+  const corpo = await escrever("kit.enviar", { tituloId, contatoIds });
+  return corpo.aviso;
+}
+
 export async function enviarBoletoCora(tituloId: string, contatoIds: string[]): Promise<string | undefined> {
   const corpo = await escrever("boleto.enviar", { tituloId, contatoIds });
   return corpo.aviso;
@@ -947,13 +967,7 @@ export async function cancelarBoletoCora(tituloId: string): Promise<string | und
 }
 
 export async function abrirPdfBoleto(tituloId: string): Promise<void> {
-  if (!supabase) throw new DomainError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente deste ERP.");
-  const sessao = await supabase.auth.getSession();
-  const token = sessao.data.session?.access_token;
-  if (!token) throw new DomainError("Entre de novo.");
-  const resposta = await fetch(`/api/titulos/${tituloId}/boleto.pdf`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const resposta = await comSessao(`/api/titulos/${tituloId}/boleto.pdf`);
   if (!resposta.ok) {
     const corpo = (await resposta.json().catch(() => ({}))) as { message?: string };
     throw new DomainError(corpo.message ?? "Não foi possível abrir o PDF.");

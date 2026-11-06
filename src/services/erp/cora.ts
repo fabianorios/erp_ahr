@@ -414,6 +414,62 @@ export function assuntoBoleto(descricao: string): string {
   return `Boleto ${limpo}`.slice(0, 140);
 }
 
+export function assuntoKit(descricao: string): string {
+  const limpo = descricao.replace(/\s+/g, " ").trim() || "AHR";
+  return `NFS-e e boleto ${limpo}`.slice(0, 140);
+}
+
+export function textoEmailKit(input: { nome: string; descricao: string; numeroNf: string; valor: string; vencimento: string }): string {
+  return `Olá ${input.nome},\n\nSegue a NFS-e ${input.numeroNf} e o boleto de ${input.descricao}.\nValor: ${input.valor}\nVencimento: ${input.vencimento}\n\nOs dois PDFs estão neste e-mail.`;
+}
+
+export function nomePdfNfse(numero: string): string {
+  const limpo = numero.replace(/[^\dA-Za-z_-]/g, "").slice(0, 40) || "nota";
+  return `nfse-${limpo}.pdf`;
+}
+
+export type AnexoKit = { nome: string; tipo: "application/pdf"; bytes: Uint8Array };
+
+export function anexosDoKit(nfse: Uint8Array, boleto: Uint8Array, numero: string): AnexoKit[] {
+  if (!ehPdf(nfse)) throw new DomainError("O PDF da NFS-e não está no servidor.");
+  if (!ehPdf(boleto)) throw new DomainError("O PDF do boleto não está no servidor.");
+  return [
+    { nome: nomePdfNfse(numero), tipo: "application/pdf", bytes: nfse },
+    { nome: "boleto.pdf", tipo: "application/pdf", bytes: boleto },
+  ];
+}
+
+export async function executarEnvioKit(input: {
+  nfseInformada: boolean;
+  numeroNf: string;
+  pdfNfse: Uint8Array | null;
+  pdfBoleto: Uint8Array | null;
+  descricao: string;
+  valor: string;
+  vencimento: string;
+  contatos: { nome: string; email: string }[];
+  enviar: (mensagem: { para: string[]; assunto: string; texto: string; anexos: AnexoKit[] }) => Promise<void>;
+}): Promise<string> {
+  if (!input.nfseInformada || !input.pdfNfse) throw new DomainError("O PDF da NFS-e não está no servidor.");
+  if (!input.pdfBoleto) throw new DomainError("O PDF do boleto não está no servidor.");
+  if (input.contatos.length === 0) throw new DomainError("Marque um contato.");
+  const anexos = anexosDoKit(input.pdfNfse, input.pdfBoleto, input.numeroNf);
+  const nome = input.contatos.length === 1 ? input.contatos[0].nome : "cliente";
+  await input.enviar({
+    para: input.contatos.map((contato) => contato.email),
+    assunto: assuntoKit(input.descricao),
+    texto: textoEmailKit({
+      nome,
+      descricao: input.descricao,
+      numeroNf: input.numeroNf.trim(),
+      valor: input.valor,
+      vencimento: input.vencimento,
+    }),
+    anexos,
+  });
+  return `Kit enviado para ${input.contatos.map((contato) => contato.email).join(", ")}.`;
+}
+
 export function textoEmailBoleto(input: {
   nome: string;
   descricao: string;

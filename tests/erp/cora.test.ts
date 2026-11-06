@@ -11,6 +11,7 @@ import {
   ehPdf,
   executarCancelamento,
   executarEmissao,
+  executarEnvioKit,
   executarVencimento,
   gatilhosPendentes,
   lerAvisoWebhook,
@@ -22,6 +23,7 @@ import {
   type TituloParaCora,
 } from "../../src/services/erp/cora.ts";
 import { caminhoPdf, gravarPdfEm, lerPdfEm } from "../../server/boleto-cora.ts";
+import { montarGraph } from "../../server/email.ts";
 
 const TITULO = "11111111-1111-4111-8111-111111111111";
 const HOJE = "2026-11-05";
@@ -405,5 +407,86 @@ describe("vencimento e cancelamento do boleto Cora", () => {
     });
     assert.deepEqual(passos, ["cora", "gravar", "cancelar", "marcar"]);
     assert.match(cancelado.aviso, /título continua/);
+  });
+});
+
+describe("kit da NFS-e e do boleto", () => {
+  const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
+
+  it("manda um único e-mail com os dois PDFs e não envia se falta um", async () => {
+    let chamadas = 0;
+    await assert.rejects(
+      () =>
+        executarEnvioKit({
+          nfseInformada: false,
+          numeroNf: "4521",
+          pdfNfse: null,
+          pdfBoleto: pdf,
+          descricao: "Consultoria DIRF",
+          valor: "R$ 1.500,50",
+          vencimento: "20/11/2026",
+          contatos: [{ nome: "Ana", email: "ana@vis.com.br" }],
+          enviar: async () => {
+            chamadas += 1;
+          },
+        }),
+      /NFS-e/,
+    );
+    await assert.rejects(
+      () =>
+        executarEnvioKit({
+          nfseInformada: true,
+          numeroNf: "4521",
+          pdfNfse: pdf,
+          pdfBoleto: null,
+          descricao: "Consultoria DIRF",
+          valor: "R$ 1.500,50",
+          vencimento: "20/11/2026",
+          contatos: [{ nome: "Ana", email: "ana@vis.com.br" }],
+          enviar: async () => {
+            chamadas += 1;
+          },
+        }),
+      /boleto/,
+    );
+    assert.equal(chamadas, 0);
+    let mensagem: { para: string[]; anexos: { nome: string }[]; texto: string } | null = null;
+    const aviso = await executarEnvioKit({
+      nfseInformada: true,
+      numeroNf: "4521",
+      pdfNfse: pdf,
+      pdfBoleto: pdf,
+      descricao: "Consultoria DIRF",
+      valor: "R$ 1.500,50",
+      vencimento: "20/11/2026",
+      contatos: [
+        { nome: "Ana", email: "ana@vis.com.br" },
+        { nome: "Bia", email: "bia@vis.com.br" },
+      ],
+      enviar: async (pedido) => {
+        chamadas += 1;
+        mensagem = pedido;
+      },
+    });
+    assert.equal(chamadas, 1);
+    assert.match(aviso, /ana@vis.com.br/);
+    assert.match(aviso, /bia@vis.com.br/);
+    assert.deepEqual(mensagem?.para, ["ana@vis.com.br", "bia@vis.com.br"]);
+    assert.deepEqual(mensagem?.anexos.map((anexo) => anexo.nome), ["nfse-4521.pdf", "boleto.pdf"]);
+    assert.match(mensagem?.texto ?? "", /NFS-e 4521/);
+    const graph = montarGraph(
+      { fromEmail: "financeiro@ahr.com.br", fromName: "AHR" },
+      {
+        para: mensagem?.para ?? [],
+        assunto: "NFS-e e boleto",
+        texto: mensagem?.texto ?? "",
+        anexos: (mensagem?.anexos ?? []).map((anexo) => ({ nome: anexo.nome, tipo: "application/pdf", bytes: Buffer.from(pdf) })),
+      },
+    );
+    assert.equal(graph.message.toRecipients.length, 2);
+    assert.equal(graph.message.attachments?.length, 2);
+    assert.equal(graph.message.attachments?.[0]?.name, "nfse-4521.pdf");
+    assert.equal(graph.message.attachments?.[1]?.name, "boleto.pdf");
+    assert.equal(ehPdf(pdf), true);
   });
 });

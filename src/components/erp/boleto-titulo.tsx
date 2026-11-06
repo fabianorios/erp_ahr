@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AvisoConsulta, Pill, executar, reais, dataBr } from "@/components/erp/apresentacao";
-import { abrirPdfBoleto, alterarVencimentoBoletoCora, cancelarBoletoCora, emitirBoletoCora, enviarBoletoCora, listarContatos, type TituloItem } from "@/services/erp/api";
+import { abrirPdfBoleto, alterarVencimentoBoletoCora, cancelarBoletoCora, consultarKit, emitirBoletoCora, enviarBoletoCora, enviarKit, listarContatos, type TituloItem } from "@/services/erp/api";
 import { DomainError } from "@/services/erp/domain";
 
 const STATUS_CORA: Record<string, string> = {
@@ -27,16 +27,21 @@ export function BoletoTitulo({
   const boleto = titulo.boleto;
   const cora = Boolean(boleto?.coraId);
   const podeEmitir = !boleto && (titulo.status === "previsto" || titulo.status === "faturado");
-  const [escolhendo, setEscolhendo] = useState(false);
+  const [envio, setEnvio] = useState<null | "boleto" | "kit">(null);
   const [marcados, setMarcados] = useState<string[]>([]);
   const [vencimento, setVencimento] = useState(boleto?.vencimento ?? "");
   const [confirmando, setConfirmando] = useState(false);
   const [ocupado, setOcupado] = useState(false);
   const podeMexer = cora && (boleto?.status === "aberto" || boleto?.status === "atrasado");
+  const kit = useQuery({
+    queryKey: ["erp", "kit", titulo.id, titulo.nfse?.status, boleto?.temPdf, boleto?.coraId],
+    queryFn: () => consultarKit(titulo.id),
+  });
+  const podeKit = Boolean(kit.data?.nfse && kit.data?.boleto);
   const contatos = useQuery({
     queryKey: ["erp", "contatos", titulo.clienteId],
     queryFn: () => listarContatos(titulo.clienteId ?? ""),
-    enabled: escolhendo && Boolean(titulo.clienteId),
+    enabled: envio !== null && Boolean(titulo.clienteId),
   });
 
   function alternar(id: string) {
@@ -111,11 +116,14 @@ export function BoletoTitulo({
               Abrir PDF
             </Button>
           )}
-          {boleto?.temPdf && !escolhendo && (
-            <Button variant="outline" disabled={ocupado} onClick={() => setEscolhendo(true)}>
+          {boleto?.temPdf && envio !== "boleto" && (
+            <Button variant="outline" disabled={ocupado} onClick={() => { setEnvio("boleto"); setMarcados([]); }}>
               Enviar boleto
             </Button>
           )}
+          <Button variant="outline" disabled={ocupado || !podeKit} onClick={() => { setEnvio("kit"); setMarcados([]); }}>
+            Enviar kit
+          </Button>
           {podeMexer && (
             <Button variant="outline" disabled={ocupado} onClick={() => setConfirmando((atual) => !atual)}>
               Cancelar boleto
@@ -173,10 +181,18 @@ export function BoletoTitulo({
         {boleto && !boleto.temPdf && cora && (
           <p className="text-sm text-muted-foreground">O PDF deste boleto não está no servidor.</p>
         )}
-        {escolhendo && boleto?.temPdf && (
+        <AvisoConsulta erro={kit.error} />
+        {!podeKit && !kit.isLoading && !kit.error && (
+          <p className="text-sm text-muted-foreground">Enviar kit fica disponível quando o PDF da NFS-e e o PDF do boleto Cora estão no servidor.</p>
+        )}
+        {envio && (
           <div className="space-y-2">
             <p className="text-sm font-medium">Contatos do cliente</p>
-            <p className="text-sm text-muted-foreground">Os mesmos contatos da NFS-e e da assinatura. Marque quem recebe o PDF.</p>
+            <p className="text-sm text-muted-foreground">
+              {envio === "kit"
+                ? "Os mesmos contatos da NFS-e. Um único e-mail leva os dois PDFs."
+                : "Os mesmos contatos da NFS-e e da assinatura. Marque quem recebe o PDF."}
+            </p>
             {!titulo.clienteId && <p className="text-sm text-muted-foreground">Este título não tem cliente.</p>}
             <AvisoConsulta erro={contatos.error} />
             {contatos.isLoading && <p className="text-sm text-muted-foreground">Carregando contatos…</p>}
@@ -190,18 +206,18 @@ export function BoletoTitulo({
               </label>
             ))}
             <Button
-              disabled={ocupado || marcados.length === 0}
+              disabled={ocupado || marcados.length === 0 || (envio === "kit" && !podeKit) || (envio === "boleto" && !boleto?.temPdf)}
               onClick={() => {
                 setOcupado(true);
                 void executar(async () => {
-                  const aviso = await enviarBoletoCora(titulo.id, marcados);
-                  setEscolhendo(false);
+                  const aviso = envio === "kit" ? await enviarKit(titulo.id, marcados) : await enviarBoletoCora(titulo.id, marcados);
+                  setEnvio(null);
                   setMarcados([]);
                   return aviso;
-                }, "Boleto enviado.").finally(() => setOcupado(false));
+                }, envio === "kit" ? "Kit enviado." : "Boleto enviado.").finally(() => setOcupado(false));
               }}
             >
-              Enviar boleto
+              {envio === "kit" ? "Enviar kit" : "Enviar boleto"}
             </Button>
           </div>
         )}

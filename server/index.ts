@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { createClient } from "@supabase/supabase-js";
 import { DomainError, adicionaisDeJson, agendaDeJson, formatBrl, htmlAdicionais, htmlAgenda, reaisToCents } from "../src/services/erp/domain.ts";
 import { executarAssinatura, executarAssinaturaPublica, propostaIdDaAssinatura } from "./assinaturas.ts";
-import { lerPdfDoTitulo, tratarAvisoCora } from "./boleto-cora.ts";
+import { lerPdfDoTitulo, situacaoKit, tratarAvisoCora } from "./boleto-cora.ts";
 import { lerAvisoWebhook } from "../src/services/erp/cora.ts";
 import { executarGravacao } from "./gravacoes.ts";
 import { dataPropostaExtenso, docxParaPdf, preencherModeloDoDisco } from "./proposta-docx.ts";
@@ -214,6 +214,21 @@ const server = createServer((req, res) => {
       const acesso = await papelDe(tokenDe(req), true);
       if (acesso.papel) json(res, 200, { papel: acesso.papel });
       else json(res, acesso.status, { message: acesso.message ?? "Sem papel de equipe." });
+      return;
+    }
+    const kit = /^\/api\/titulos\/([0-9a-f-]{36})\/kit$/i.exec(caminho);
+    if (req.method === "GET" && kit) {
+      const acesso = await papelDe(tokenDe(req));
+      if (!acesso.papel) {
+        json(res, acesso.status, { message: acesso.message ?? "Sem papel de equipe." });
+        return;
+      }
+      try {
+        json(res, 200, await situacaoKit(admin, kit[1]));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Não foi possível ver o kit.";
+        json(res, error instanceof DomainError ? 400 : 500, { message });
+      }
       return;
     }
     const pdfBoleto = /^\/api\/titulos\/([0-9a-f-]{36})\/boleto\.pdf$/i.exec(caminho);
