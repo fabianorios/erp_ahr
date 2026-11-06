@@ -198,6 +198,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
     codigoServico,
     forma,
     banco,
+    inscricaoMunicipal: "",
   };
 }
 
@@ -205,7 +206,6 @@ export function montarDps(pedido: PedidoNfse): string {
   const pronto = validarPedidoNfse(pedido);
   const id = idDps(pronto.cMunPrestador, pronto.cnpjPrestador, pronto.serie, pronto.numeroDps);
   const doc = pronto.documento.length === 14 ? "CNPJ" : "CPF";
-  const inscricao = pronto.inscricaoMunicipal.trim();
   const email = pronto.email.trim();
   const complemento = pronto.complemento.trim();
   return `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -220,7 +220,6 @@ export function montarDps(pedido: PedidoNfse): string {
     `<tpEmit>1</tpEmit>` +
     `<cLocEmi>${pronto.cMunPrestador}</cLocEmi>` +
     `<prest><CNPJ>${pronto.cnpjPrestador}</CNPJ>` +
-    (inscricao ? `<IM>${xml(inscricao)}</IM>` : "") +
     `<regTrib><opSimpNac>1</opSimpNac><regEspTrib>0</regEspTrib></regTrib></prest>` +
     `<toma><${doc}>${pronto.documento}</${doc}><xNome>${xml(pronto.nome)}</xNome>` +
     (email ? `<email>${xml(email)}</email>` : "") +

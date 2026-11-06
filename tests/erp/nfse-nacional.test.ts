@@ -77,6 +77,7 @@ describe("emissão no Emissor Nacional", () => {
     assert.match(xml, /<vServ>169\.00<\/vServ>/);
     assert.match(xml, /<dhEmi>2026-11-06T08:00:00-03:00<\/dhEmi>/);
     assert.match(xml, /<dCompet>2026-11-06<\/dCompet>/);
+    assert.doesNotMatch(montarDps(pedido({ inscricaoMunicipal: "12345678" })), /<IM>/);
     assert.equal(instanteBrasil(new Date("2026-11-06T11:00:00Z")).startsWith("2026-11-06T08:00:00"), true);
     const hoje = "2026-11-06";
     assert.equal(competenciaEnviada("2026-11-02", `${hoje}T08:00:00-03:00`), "2026-11-02");

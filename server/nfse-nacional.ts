@@ -302,7 +302,6 @@ function configPrestador(): {
   base: string;
   ambiente: 1 | 2;
   cnpj: string;
-  im: string;
   codigoServico: string;
   serie: string;
   cMun: string;
@@ -325,7 +324,6 @@ function configPrestador(): {
     base: ambiente.base,
     ambiente: ambiente.ambiente,
     cnpj: (process.env.NFSE_CNPJ ?? "").trim(),
-    im: (process.env.NFSE_INSCRICAO_MUNICIPAL ?? "").trim(),
     codigoServico: (process.env.NFSE_ITEM_SERVICO ?? "").trim(),
     serie,
     cMun: (process.env.NFSE_CODIGO_MUNICIPIO ?? "").trim(),
@@ -385,7 +383,7 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
     cMunTomador: await codigoTomador(String(cliente.cidade ?? ""), String(cliente.uf ?? ""), cep),
     cMunPrestador: prestador.cMun,
     cnpjPrestador: prestador.cnpj,
-    inscricaoMunicipal: prestador.im,
+    inscricaoMunicipal: "",
     codigoServico: prestador.codigoServico,
     serie: prestador.serie,
     numeroDps: numeroDps(agora, agora.getMilliseconds()),
