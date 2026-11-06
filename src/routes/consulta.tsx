@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AvisoConsulta, Campo, Pill, TituloPagina, dataBr, executar, reais } from "@/components/erp/apresentacao";
 import { ROTULO_FORMA, textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
-import { listarCentros, listarTitulos, preencherTitulosVazios, type TituloItem } from "@/services/erp/api";
+import { excluirTitulo, listarCentros, listarTitulos, preencherTitulosVazios, type TituloItem } from "@/services/erp/api";
+import { podeExcluirTitulo } from "@/services/erp/domain";
 
 const STATUS = [
   ["todos", "Todos"],
@@ -94,7 +95,7 @@ export function ConsultaPage() {
     <div className="space-y-6">
       <TituloPagina
         titulo="Consulta de títulos a receber"
-        descricao="A lista dos títulos. Abrir uma linha volta para a manutenção daquele título."
+        descricao="A lista dos títulos. Excluir fica na linha quando não há NFS-e nem boleto. Abrir uma linha volta para a manutenção daquele título."
       />
       <AvisoConsulta erro={titulos.error ?? centros.error} />
       <div className="grid gap-3 md:grid-cols-3">
@@ -230,6 +231,7 @@ export function ConsultaPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
+                    {canEdit && <th className="py-2 pr-3 font-medium"><span className="sr-only">Excluir</span></th>}
                     <th className="py-2 pr-3 font-medium">
                       <input
                         type="checkbox"
@@ -258,8 +260,16 @@ export function ConsultaPage() {
                       titulo={titulo}
                       centroNome={nomeCentro(titulo, nomesCentro)}
                       marcado={selecionados.includes(titulo.id)}
+                      canEdit={canEdit}
                       onMarcar={(marcado) => marcar(titulo.id, marcado)}
                       onOpen={() => navigate(`/contas/${titulo.id}`)}
+                      onExcluir={() =>
+                        executar(async () => {
+                          await excluirTitulo(titulo);
+                          setSelecionados((atual) => atual.filter((id) => id !== titulo.id));
+                          await qc.invalidateQueries({ queryKey: ["erp", "titulos"] });
+                        }, "Título excluído")
+                      }
                     />
                   ))}
                 </tbody>
@@ -277,21 +287,43 @@ function nomeCentro(titulo: TituloItem, nomes: Map<string, string>): string {
   return nomes.get(titulo.centroId) || "";
 }
 
+function mostraExcluir(titulo: TituloItem): boolean {
+  try {
+    podeExcluirTitulo(Boolean(titulo.nfse), Boolean(titulo.boleto));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function Linha({
   titulo,
   centroNome,
   marcado,
+  canEdit,
   onMarcar,
   onOpen,
+  onExcluir,
 }: {
   titulo: TituloItem;
   centroNome: string;
   marcado: boolean;
+  canEdit: boolean;
   onMarcar: (marcado: boolean) => void;
   onOpen: () => void;
+  onExcluir: () => void;
 }) {
   return (
     <tr className="cursor-pointer border-b hover:bg-muted/40" onClick={onOpen}>
+      {canEdit && (
+        <td className="py-2 pr-3" onClick={(event) => event.stopPropagation()}>
+          {mostraExcluir(titulo) && (
+            <Button type="button" variant="ghost" size="sm" onClick={onExcluir}>
+              Excluir
+            </Button>
+          )}
+        </td>
+      )}
       <td className="py-2 pr-3" onClick={(event) => event.stopPropagation()}>
         <input type="checkbox" aria-label={`Selecionar ${titulo.descricao}`} checked={marcado} onChange={(event) => onMarcar(event.target.checked)} />
       </td>
