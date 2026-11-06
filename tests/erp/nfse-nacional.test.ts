@@ -11,7 +11,7 @@ import forge from "node-forge";
 import {
   ambienteNfse,
   idDps,
-  competenciaEnviada,
+  codigoTributacaoNacional,
   instanteBrasil,
   lerNotaAutorizada,
   montarDps,
@@ -49,6 +49,9 @@ function pedido(parcial: Partial<PedidoNfse> = {}): PedidoNfse {
     cnpjPrestador: "50516724000160",
     inscricaoMunicipal: "",
     codigoServico: "170101",
+    codigoMunicipal: "020",
+    cNbs: "114011900",
+    aliquota: "2,00",
     serie: "1",
     numeroDps: "100000000000001",
     emitidoEm: "2026-11-06T08:00:00-03:00",
@@ -75,20 +78,30 @@ describe("emissão no Emissor Nacional", () => {
     assert.match(xml, /Consultoria mensal/);
     assert.match(xml, /19678493000141/);
     assert.match(xml, /<vServ>169\.00<\/vServ>/);
+    assert.match(xml, /versao="1.01"/);
+    assert.match(xml, /<verAplic>ERP-AHR-1.0<\/verAplic>/);
+    assert.match(xml, /<serie>1<\/serie>/);
+    assert.match(xml, /<nDPS>100000000000001<\/nDPS>/);
     assert.match(xml, /<cTribNac>170101<\/cTribNac>/);
-    assert.match(montarDps(pedido({ codigoServico: "010601" })), /<cTribNac>170101<\/cTribNac>/);
+    assert.match(xml, /<cTribMun>020<\/cTribMun>/);
+    assert.match(xml, /<cNBS>114011900<\/cNBS>/);
+    assert.match(xml, /<opSimpNac>3<\/opSimpNac><regApTribSN>1<\/regApTribSN><regEspTrib>0<\/regEspTrib>/);
+    assert.match(xml, /<pTotTribSN>2.00<\/pTotTribSN>/);
+    assert.doesNotMatch(xml, /<email>/);
+    assert.doesNotMatch(xml, /<IM>/);
+    assert.doesNotMatch(xml, /indTotTrib/);
+    assert.equal(codigoTributacaoNacional("17.01"), "170101");
+    assert.equal(codigoTributacaoNacional("010601"), "010601");
+    assert.match(montarDps(pedido({ codigoServico: "010601" })), /<cTribNac>010601<\/cTribNac>/);
     assert.match(xml, /<dhEmi>2026-11-06T08:00:00-03:00<\/dhEmi>/);
     assert.match(xml, /<dCompet>2026-11-06<\/dCompet>/);
+    assert.match(montarDps(pedido({ numeroDps: "1" })), /<nDPS>1<\/nDPS>/);
     assert.doesNotMatch(montarDps(pedido({ inscricaoMunicipal: "12345678" })), /<IM>/);
+    assert.doesNotMatch(montarDps(pedido({ codigoMunicipal: "12345" })), /<cTribMun>/);
     assert.equal(instanteBrasil(new Date("2026-11-06T11:00:00Z")).startsWith("2026-11-06T08:00:00"), true);
-    const hoje = "2026-11-06";
-    assert.equal(competenciaEnviada("2026-11-02", `${hoje}T08:00:00-03:00`), "2026-11-02");
-    assert.equal(competenciaEnviada("2026-11-20", `${hoje}T08:00:00-03:00`), hoje);
-    assert.equal(competenciaEnviada("2026-12-20", `${hoje}T08:00:00-03:00`), hoje);
-    assert.equal(competenciaEnviada("2026-10-15", `${hoje}T08:00:00-03:00`), hoje);
-    const futuro = montarDps(pedido({ vencimento: "2026-12-20", competencia: "2026-12-20" }));
+    const futuro = montarDps(pedido({ vencimento: "2026-11-02", competencia: "2026-11-02" }));
     assert.match(futuro, /<dCompet>2026-11-06<\/dCompet>/);
-    assert.doesNotMatch(futuro, /<dCompet>2026-12/);
+    assert.doesNotMatch(montarDps(pedido({ vencimento: "2026-12-20", competencia: "2026-12-20" })), /<dCompet>2026-12/);
   });
 
   it("rejeição não cria título; nota autorizada nasce com cliente, valor, número e descrição", async () => {

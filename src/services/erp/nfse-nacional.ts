@@ -3,8 +3,6 @@
 import { DomainError, MUNICIPIO_NFSE, assertData, centsToReais, competenciaDoVencimento, reaisToCents, somenteDigitos, type Cents } from "./domain.ts";
 
 export const CODIGO_MUNICIPIO_PRESTADOR = "3548807";
-/** 17.01.01 — assessoria ou consultoria, item que o município do prestador administra. */
-export const CODIGO_TRIBUTACAO_NACIONAL = "170101";
 export const ORIGEM_TITULO_NFSE = "Emissor Nacional";
 const HOSTS_SEFIN = ["sefin.nfse.gov.br", "sefin.producaorestrita.nfse.gov.br"] as const;
 
@@ -31,6 +29,9 @@ export type PedidoNfse = {
   cnpjPrestador: string;
   inscricaoMunicipal: string;
   codigoServico: string;
+  codigoMunicipal: string;
+  cNbs: string;
+  aliquota: string;
   serie: string;
   numeroDps: string;
   emitidoEm: string;
@@ -130,12 +131,12 @@ export function instanteBrasil(agora: Date): string {
   return `${pegar("year")}-${pegar("month")}-${pegar("day")}T${pegar("hour")}:${pegar("minute")}:${pegar("second")}-03:00`;
 }
 
-/** Dia civil da emissão. A competência da DPS não pode passar dele nem ir para um mês seguinte. */
-export function competenciaEnviada(vencimento: string, emitidoEm: string): string {
-  const emissao = assertData(emitidoEm.slice(0, 10), "Emissão");
-  const dia = assertData(vencimento, "Vencimento");
-  if (dia.slice(0, 7) === emissao.slice(0, 7) && dia <= emissao) return dia;
-  return emissao;
+/** Seis dígitos da lista nacional. Item com quatro dígitos recebe 01 no fim, como na nota autorizada. */
+export function codigoTributacaoNacional(item: string): string {
+  const digitos = somenteDigitos(item);
+  if (digitos.length === 6) return digitos;
+  if (digitos.length === 4) return `${digitos}01`;
+  throw new DomainError("O item de serviço da NFS-e não está configurado.");
 }
 
 export function codigoIbgeConhecido(cidade: string, uf: string): string | null {
@@ -171,8 +172,13 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
   if (!/^\d{7}$/.test(input.cMunTomador)) throw new DomainError("Não foi possível identificar o município do cliente.");
   const cnpj = somenteDigitos(input.cnpjPrestador);
   if (cnpj.length !== 14) throw new DomainError("O CNPJ do prestador não está configurado.");
-  const codigoServico = CODIGO_TRIBUTACAO_NACIONAL;
-  if (!/^\d{6}$/.test(codigoServico)) throw new DomainError("O item de serviço da NFS-e não está configurado.");
+  const codigoServico = codigoTributacaoNacional(input.codigoServico);
+  const codigoMunicipal = somenteDigitos(input.codigoMunicipal);
+  const cNbs = somenteDigitos(input.cNbs);
+  if (!cNbs) throw new DomainError("O código NBS da NFS-e não está configurado.");
+  const aliquotaNumero = Number(input.aliquota.trim().replace(",", "."));
+  if (!Number.isFinite(aliquotaNumero) || aliquotaNumero < 0) throw new DomainError("A alíquota da NFS-e não está configurada.");
+  const aliquota = aliquotaNumero.toFixed(2);
   const cMunPrestador = somenteDigitos(input.cMunPrestador);
   if (!/^\d{7}$/.test(cMunPrestador)) throw new DomainError("O município emissor da NFS-e não está configurado.");
   const forma = input.forma.trim() || "boleto";
@@ -183,7 +189,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
   if (banco && (banco.length < 2 || banco.length > 80)) throw new DomainError("Informe o banco de recebimento.");
   if (input.ambiente !== 1 && input.ambiente !== 2) throw new DomainError("O ambiente do Emissor Nacional é inválido.");
   idDps(cMunPrestador, cnpj, input.serie, input.numeroDps);
-  const competencia = competenciaEnviada(vencimento, input.emitidoEm);
+  const competencia = assertData(input.emitidoEm.slice(0, 10), "Emissão");
   return {
     ...input,
     clienteId,
@@ -198,6 +204,9 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
     cMunPrestador,
     cnpjPrestador: cnpj,
     codigoServico,
+    codigoMunicipal,
+    cNbs,
+    aliquota,
     forma,
     banco,
     inscricaoMunicipal: "",
@@ -208,32 +217,31 @@ export function montarDps(pedido: PedidoNfse): string {
   const pronto = validarPedidoNfse(pedido);
   const id = idDps(pronto.cMunPrestador, pronto.cnpjPrestador, pronto.serie, pronto.numeroDps);
   const doc = pronto.documento.length === 14 ? "CNPJ" : "CPF";
-  const email = pronto.email.trim();
   const complemento = pronto.complemento.trim();
+  const codigoMunicipal = /^\d{3}$/.test(pronto.codigoMunicipal) ? `<cTribMun>${pronto.codigoMunicipal}</cTribMun>` : "";
   return `<?xml version="1.0" encoding="UTF-8"?>` +
-    `<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.00">` +
+    `<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">` +
     `<infDPS Id="${id}">` +
     `<tpAmb>${pronto.ambiente}</tpAmb>` +
     `<dhEmi>${xml(pronto.emitidoEm)}</dhEmi>` +
-    `<verAplic>ERPAhr_1</verAplic>` +
-    `<serie>${pronto.serie.padStart(5, "0")}</serie>` +
-    `<nDPS>${pronto.numeroDps.padStart(15, "0")}</nDPS>` +
+    `<verAplic>ERP-AHR-1.0</verAplic>` +
+    `<serie>${xml(pronto.serie)}</serie>` +
+    `<nDPS>${xml(pronto.numeroDps)}</nDPS>` +
     `<dCompet>${pronto.competencia}</dCompet>` +
     `<tpEmit>1</tpEmit>` +
     `<cLocEmi>${pronto.cMunPrestador}</cLocEmi>` +
     `<prest><CNPJ>${pronto.cnpjPrestador}</CNPJ>` +
-    `<regTrib><opSimpNac>1</opSimpNac><regEspTrib>0</regEspTrib></regTrib></prest>` +
+    `<regTrib><opSimpNac>3</opSimpNac><regApTribSN>1</regApTribSN><regEspTrib>0</regEspTrib></regTrib></prest>` +
     `<toma><${doc}>${pronto.documento}</${doc}><xNome>${xml(pronto.nome)}</xNome>` +
-    (email ? `<email>${xml(email)}</email>` : "") +
     `<end><endNac><cMun>${pronto.cMunTomador}</cMun><CEP>${pronto.cep}</CEP></endNac>` +
     `<xLgr>${xml(pronto.logradouro.trim())}</xLgr><nro>${xml(pronto.numero.trim())}</nro>` +
     (complemento ? `<xCpl>${xml(complemento)}</xCpl>` : "") +
     `<xBairro>${xml(pronto.bairro.trim())}</xBairro></end></toma>` +
     `<serv><locPrest><cLocPrestacao>${pronto.cMunPrestador}</cLocPrestacao></locPrest>` +
-    `<cServ><cTribNac>${pronto.codigoServico}</cTribNac><xDescServ>${xml(pronto.descricao)}</xDescServ></cServ></serv>` +
+    `<cServ><cTribNac>${pronto.codigoServico}</cTribNac>${codigoMunicipal}<xDescServ>${xml(pronto.descricao)}</xDescServ><cNBS>${pronto.cNbs}</cNBS></cServ></serv>` +
     `<valores><vServPrest><vServ>${pronto.valor}</vServ></vServPrest>` +
     `<trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>1</tpRetISSQN></tribMun>` +
-    `<totTrib><indTotTrib>0</indTotTrib></totTrib></trib></valores>` +
+    `<totTrib><pTotTribSN>${pronto.aliquota}</pTotTribSN></totTrib></trib></valores>` +
     `</infDPS></DPS>`;
 }
 

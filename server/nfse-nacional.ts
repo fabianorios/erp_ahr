@@ -9,9 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { DomainError, centsToReais } from "../src/services/erp/domain.ts";
 import {
   ambienteNfse,
-  CODIGO_TRIBUTACAO_NACIONAL,
   codigoIbgeConhecido,
-  competenciaEnviada,
   instanteBrasil,
   lerNotaAutorizada,
   montarDps,
@@ -304,6 +302,9 @@ function configPrestador(): {
   ambiente: 1 | 2;
   cnpj: string;
   codigoServico: string;
+  codigoMunicipal: string;
+  cNbs: string;
+  aliquota: string;
   serie: string;
   cMun: string;
   chave: string;
@@ -314,6 +315,14 @@ function configPrestador(): {
   if (!certPath || !senha.trim()) throw new DomainError("O certificado A1 da NFS-e não está configurado no servidor.");
   const serie = (process.env.NFSE_SERIE_DPS ?? "").trim();
   if (!serie) throw new DomainError("A série da DPS não está configurada.");
+  const codigoServico = (process.env.NFSE_ITEM_SERVICO ?? "").trim();
+  const codigoMunicipal = (process.env.NFSE_CODIGO_TRIBUTACAO ?? "").trim();
+  const cNbs = (process.env.NFSE_CODIGO_NBS ?? "").trim();
+  const aliquota = (process.env.NFSE_ALIQUOTA_ISS ?? "").trim();
+  if (!codigoServico) throw new DomainError("O item de serviço da NFS-e não está configurado.");
+  if (!codigoMunicipal) throw new DomainError("O código de tributação municipal da NFS-e não está configurado.");
+  if (!cNbs) throw new DomainError("O código NBS da NFS-e não está configurado.");
+  if (!aliquota) throw new DomainError("A alíquota da NFS-e não está configurada.");
   let pfx: Buffer;
   try {
     pfx = readFileSync(certPath);
@@ -325,7 +334,10 @@ function configPrestador(): {
     base: ambiente.base,
     ambiente: ambiente.ambiente,
     cnpj: (process.env.NFSE_CNPJ ?? "").trim(),
-    codigoServico: CODIGO_TRIBUTACAO_NACIONAL,
+    codigoServico,
+    codigoMunicipal,
+    cNbs,
+    aliquota,
     serie,
     cMun: (process.env.NFSE_CODIGO_MUNICIPIO ?? "").trim(),
     chave: aberto.chave,
@@ -367,7 +379,7 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
     descricao: texto(dados, "descricao"),
     valor: texto(dados, "valor"),
     vencimento,
-    competencia: competenciaEnviada(vencimento, emitidoEm),
+    competencia: emitidoEm.slice(0, 10),
     centroId,
     forma: texto(dados, "forma"),
     banco: texto(dados, "banco"),
@@ -386,6 +398,9 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
     cnpjPrestador: prestador.cnpj,
     inscricaoMunicipal: "",
     codigoServico: prestador.codigoServico,
+    codigoMunicipal: prestador.codigoMunicipal,
+    cNbs: prestador.cNbs,
+    aliquota: prestador.aliquota,
     serie: prestador.serie,
     numeroDps: numeroDps(agora, agora.getMilliseconds()),
     emitidoEm,
