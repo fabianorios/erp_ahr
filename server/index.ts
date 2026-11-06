@@ -216,7 +216,7 @@ const server = createServer((req, res) => {
       else json(res, acesso.status, { message: acesso.message ?? "Sem papel de equipe." });
       return;
     }
-    const kit = /^\/api\/titulos\/([0-9a-f-]{36})\/kit$/i.exec(caminho);
+    const kit = /^\/api\/titulos\/([0-9a-f-]{32,36})\/kit\/?$/i.exec(caminho);
     if (req.method === "GET" && kit) {
       const acesso = await papelDe(tokenDe(req));
       if (!acesso.papel) {

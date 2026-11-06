@@ -37,7 +37,9 @@ export function BoletoTitulo({
     queryKey: ["erp", "kit", titulo.id, titulo.nfse?.status, boleto?.temPdf, boleto?.coraId],
     queryFn: () => consultarKit(titulo.id),
   });
-  const podeKit = Boolean(kit.data?.nfse && kit.data?.boleto);
+  const podeKit = kit.isError
+    ? titulo.nfse?.status === "informada" && Boolean(boleto?.temPdf && cora)
+    : Boolean(kit.data?.nfse && kit.data?.boleto);
   const contatos = useQuery({
     queryKey: ["erp", "contatos", titulo.clienteId],
     queryFn: () => listarContatos(titulo.clienteId ?? ""),
@@ -121,7 +123,7 @@ export function BoletoTitulo({
               Enviar boleto
             </Button>
           )}
-          <Button variant="outline" disabled={ocupado || !podeKit} onClick={() => { setEnvio("kit"); setMarcados([]); }}>
+          <Button type="button" variant="outline" disabled={ocupado || !podeKit} onClick={() => { setEnvio("kit"); setMarcados([]); }}>
             Enviar kit
           </Button>
           {podeMexer && (
@@ -206,6 +208,7 @@ export function BoletoTitulo({
               </label>
             ))}
             <Button
+              type="button"
               disabled={ocupado || marcados.length === 0 || (envio === "kit" && !podeKit) || (envio === "boleto" && !boleto?.temPdf)}
               onClick={() => {
                 setOcupado(true);

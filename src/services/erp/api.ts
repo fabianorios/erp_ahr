@@ -94,7 +94,7 @@ async function ler<T>(query: PromiseLike<Result>): Promise<T[]> {
   return (data ?? []) as T[];
 }
 
-async function escrever(acao: string, dados: unknown): Promise<{ id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number }> {
+async function escrever(acao: string, dados: unknown): Promise<{ id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean }> {
   if (!supabase) throw new DomainError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente deste ERP.");
   const sessao = await supabase.auth.getSession();
   const token = sessao.data.session?.access_token;
@@ -104,7 +104,7 @@ async function escrever(acao: string, dados: unknown): Promise<{ id?: string; me
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ acao, dados }),
   });
-  const corpo = (await resposta.json().catch(() => ({}))) as { id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number };
+  const corpo = (await resposta.json().catch(() => ({}))) as { id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean };
   if (!resposta.ok) throw new DomainError(corpo.message ?? "Não foi possível gravar.");
   return corpo;
 }
@@ -940,9 +940,7 @@ async function comSessao(caminho: string): Promise<Response> {
 }
 
 export async function consultarKit(tituloId: string): Promise<{ nfse: boolean; boleto: boolean }> {
-  const resposta = await comSessao(`/api/titulos/${tituloId}/kit`);
-  const corpo = (await resposta.json().catch(() => ({}))) as { message?: string; nfse?: boolean; boleto?: boolean };
-  if (!resposta.ok) throw new DomainError(corpo.message ?? "Não foi possível ver o kit.");
+  const corpo = await escrever("kit.situacao", { tituloId });
   return { nfse: Boolean(corpo.nfse), boleto: Boolean(corpo.boleto) };
 }
 
