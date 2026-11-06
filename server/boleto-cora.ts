@@ -11,9 +11,12 @@ import {
   chaveWebhook,
   efeitoDoWebhook,
   ehPdf,
+  executarCancelamento,
   executarEmissao,
+  executarVencimento,
   gatilhosPendentes,
   hojeBrasil,
+  idFaturaCora,
   lerConsultaCora,
   lerEndpointsCora,
   nomeArquivoPdf,
@@ -25,6 +28,7 @@ import {
   validarBaseCora,
   type AvisoCora,
   type BoletoInserir,
+  type EfeitoVencimento,
   type EndpointCora,
   type PedidoCora,
   type TituloParaCora,
@@ -148,6 +152,32 @@ export async function enviarBoletoDoTitulo(db: Banco, tituloId: string, contatoI
   return { aviso: `Boleto enviado para ${ok.join(", ")}.` };
 }
 
+export async function alterarVencimentoDoTitulo(db: Banco, tituloId: string, data: string): Promise<{ aviso: string }> {
+  await garantirColunas(db);
+  await exigirRotinaVencimento(db);
+  const boleto = await boletoCoraDoTitulo(db, tituloId);
+  const resultado = await executarVencimento({
+    status: boleto.status,
+    atual: boleto.vencimento,
+    data,
+    hoje: hojeBrasil(),
+    chamar: (corpo) => editarVencimentoNaCora(boleto.coraId, corpo),
+    gravar: (efeito) => gravarVencimento(db, tituloId, boleto.id, efeito),
+  });
+  return { aviso: resultado.aviso };
+}
+
+export async function cancelarBoletoDoTitulo(db: Banco, tituloId: string): Promise<{ aviso: string }> {
+  await garantirColunas(db);
+  const boleto = await boletoCoraDoTitulo(db, tituloId);
+  const resultado = await executarCancelamento({
+    status: boleto.status,
+    chamar: () => cancelarNaCora(boleto.coraId),
+    gravar: () => marcarBoletoCancelado(db, boleto.id),
+  });
+  return { aviso: resultado.aviso };
+}
+
 async function garantirColunas(db: Banco): Promise<void> {
   const { error } = await db.from("erp_boletos").select("cora_invoice_id, linha_digitavel, codigo_barras, pix_emv, pdf_path, cora_status").limit(1);
   if (colunaAusente(error)) throw new DomainError(MENSAGEM_SQL);
@@ -266,6 +296,76 @@ async function contatosDoCliente(db: Banco, clienteId: string, ids: string[]): P
       email: validarEmailAssinatura(String(contato.email ?? ""), "O contato não tem e-mail.", "E-mail do contato inválido."),
     };
   });
+}
+
+async function exigirRotinaVencimento(db: Banco): Promise<void> {
+  const { error } = await db.rpc("erp_ajustar_vencimento_boleto", {
+    p_boleto_id: "00000000-0000-0000-0000-000000000000",
+    p_data: "2099-01-01",
+  });
+  const texto = `${error?.code ?? ""} ${error?.message ?? ""}`;
+  if (/42883|could not find the function|schema cache/i.test(texto)) {
+    throw new DomainError("Falta o SQL do vencimento do boleto Cora. Rode sql/boleto-cora-vencimento.sql no projeto do ERP.");
+  }
+}
+
+async function boletoCoraDoTitulo(db: Banco, tituloId: string): Promise<{ id: string; status: "aberto" | "atrasado" | "pago" | "cancelado"; vencimento: string; coraId: string }> {
+  if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
+  const { data, error } = await db.from("erp_boletos").select("id, status, vencimento, cora_invoice_id").eq("conta_receber_id", tituloId).maybeSingle();
+  if (colunaAusente(error)) throw new DomainError(MENSAGEM_SQL);
+  if (error) throw new DomainError("Não foi possível ler o boleto.");
+  if (!data?.id) throw new DomainError("Emita o boleto antes desta ação.");
+  const status = statusBoleto(data.status);
+  if (!status) throw new DomainError("Este boleto não muda de vencimento.");
+  return {
+    id: String(data.id),
+    status,
+    vencimento: String(data.vencimento ?? "").slice(0, 10),
+    coraId: idFaturaCora(typeof data.cora_invoice_id === "string" ? data.cora_invoice_id : ""),
+  };
+}
+
+async function gravarVencimento(db: Banco, tituloId: string, boletoId: string, efeito: EfeitoVencimento): Promise<void> {
+  const { error } = await db.rpc("erp_ajustar_vencimento_boleto", { p_boleto_id: boletoId, p_data: efeito.data });
+  if (error) {
+    const texto = `${error.code ?? ""} ${error.message ?? ""}`;
+    const falta = /erp_ajustar_vencimento_boleto|42883|schema cache|does not exist|could not find/i.test(texto);
+    const detalhe = falta
+      ? "Falta o SQL do vencimento do boleto Cora. Rode sql/boleto-cora-vencimento.sql no projeto do ERP."
+      : textoErro(error);
+    throw new DomainError(`A Cora alterou o vencimento, mas o título não foi atualizado. ${detalhe}`);
+  }
+  const patch: Record<string, string> = {};
+  if (efeito.linha) patch.linha_digitavel = efeito.linha;
+  if (efeito.codigoBarras) patch.codigo_barras = efeito.codigoBarras;
+  if (efeito.pix) patch.pix_emv = efeito.pix;
+  if (efeito.coraStatus) patch.cora_status = efeito.coraStatus;
+  if (efeito.status) patch.status = efeito.status;
+  if (Object.keys(patch).length > 0) {
+    const { error: extra } = await db.from("erp_boletos").update(patch).eq("id", boletoId).in("status", ["aberto", "atrasado"]);
+    if (extra) throw new DomainError(textoErro(extra));
+  }
+  if (!efeito.pdfUrl) return;
+  try {
+    await gravarPdfEm(diretorioBoletos(), tituloId, await baixarPdf(efeito.pdfUrl));
+  } catch {
+    throw new DomainError("A Cora alterou o vencimento, mas o PDF novo não pôde ser gravado.");
+  }
+}
+
+async function marcarBoletoCancelado(db: Banco, boletoId: string): Promise<void> {
+  const { data, error } = await db
+    .from("erp_boletos")
+    .update({ status: "cancelado", cora_status: "CANCELLED" })
+    .eq("id", boletoId)
+    .in("status", ["aberto", "atrasado"])
+    .select("id");
+  if (error) throw new DomainError(`A Cora cancelou o boleto, mas o ERP não gravou. ${textoErro(error)}`);
+  if (data?.length) return;
+  const { data: atual } = await db.from("erp_boletos").select("status").eq("id", boletoId).maybeSingle();
+  if (atual?.status === "cancelado") return;
+  if (atual?.status === "pago") throw new DomainError("Este boleto já foi pago.");
+  throw new DomainError("A Cora cancelou o boleto, mas o ERP não gravou.");
 }
 
 function configCora(): ConfigCora {
@@ -437,6 +537,57 @@ export async function registrarWebhooksCora(): Promise<{ trigger: string; acao: 
     resultado.push({ trigger, acao: "criado", id });
   }
   return resultado;
+}
+
+async function editarVencimentoNaCora(faturaId: string, corpo: { payment_terms: { due_date: string } }): Promise<unknown> {
+  const cfg = configCora();
+  const body = JSON.stringify(corpo);
+  const resposta = await comToken(cfg, (acesso) =>
+    httpsComCert({
+      url: `${urlsCora(cfg.base).invoices}/${idFaturaCora(faturaId)}`,
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${acesso}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "Content-Length": String(Buffer.byteLength(body)),
+      },
+      body,
+      cert: cfg.cert,
+      key: cfg.key,
+      limite: 2_000_000,
+    }),
+  );
+  if (resposta.status < 200 || resposta.status >= 300) throw erroOperacaoCora(resposta.status, resposta.texto, "vencimento");
+  if (!resposta.texto.trim()) return null;
+  try {
+    return JSON.parse(resposta.texto) as unknown;
+  } catch {
+    throw new DomainError("A Cora devolveu uma resposta inválida.");
+  }
+}
+
+async function cancelarNaCora(faturaId: string): Promise<void> {
+  const cfg = configCora();
+  const resposta = await comToken(cfg, (acesso) =>
+    httpsComCert({
+      url: `${urlsCora(cfg.base).invoices}/${idFaturaCora(faturaId)}`,
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${acesso}`, Accept: "application/json" },
+      cert: cfg.cert,
+      key: cfg.key,
+      limite: 200_000,
+    }),
+  );
+  if (resposta.status < 200 || resposta.status >= 300) throw erroOperacaoCora(resposta.status, resposta.texto, "cancelar");
+}
+
+function erroOperacaoCora(status: number, body: string, acao: "vencimento" | "cancelar"): never {
+  if (/REC-?\s*0006|j[aá] foi pago|already paid/i.test(body)) throw new DomainError("A Cora informou que o boleto já foi pago.");
+  if (status === 401 || status === 403) throw new DomainError("A Cora recusou o certificado ou o token.");
+  const detalhe = limparMensagem(extrairMensagem(body));
+  if (acao === "cancelar") throw new DomainError(detalhe ? `A Cora não cancelou o boleto: ${detalhe}` : "A Cora não cancelou o boleto.");
+  throw new DomainError(detalhe ? `A Cora não alterou o vencimento: ${detalhe}` : "A Cora não alterou o vencimento.");
 }
 
 async function consultarFaturaCora(faturaId: string): Promise<unknown> {

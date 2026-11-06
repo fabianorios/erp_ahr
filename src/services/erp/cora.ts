@@ -320,6 +320,95 @@ export function pedidoWebhook(trigger: GatilhoWebhook): { url: string; resource:
   return { url: URL_WEBHOOK_CORA, resource: "invoice", trigger };
 }
 
+const ID_FATURA_CORA = /^inv_[A-Za-z0-9_-]{8,80}$/;
+
+export function idFaturaCora(valor: string): string {
+  const id = valor.trim();
+  if (!ID_FATURA_CORA.test(id)) throw new DomainError("Este boleto não foi emitido na Cora.");
+  return id;
+}
+
+export function exigirBoletoEditavel(status: "aberto" | "atrasado" | "pago" | "cancelado"): void {
+  if (status === "pago") throw new DomainError("Este boleto já foi pago.");
+  if (status === "cancelado") throw new DomainError("Este boleto já está cancelado.");
+}
+
+export function pedidoVencimentoCora(data: string, hoje: string): { payment_terms: { due_date: string } } {
+  const vencimento = assertData(data, "Vencimento");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(hoje) || vencimento < hoje) throw new DomainError("O vencimento é anterior a hoje.");
+  return { payment_terms: { due_date: vencimento } };
+}
+
+export type EfeitoVencimento = {
+  data: string;
+  status: "aberto" | "atrasado" | null;
+  coraStatus: string | null;
+  linha: string | null;
+  codigoBarras: string | null;
+  pix: string | null;
+  pdfUrl: string | null;
+};
+
+export function lerVencimentoCora(bruto: unknown, pedido: string): EfeitoVencimento {
+  if (bruto == null || bruto === "") {
+    return { data: pedido, status: null, coraStatus: null, linha: null, codigoBarras: null, pix: null, pdfUrl: null };
+  }
+  const json = objeto(bruto);
+  if (!json) throw new DomainError("A Cora devolveu uma resposta inválida.");
+  const status = texto(json.status).toUpperCase();
+  if (status === "PAID") throw new DomainError("A Cora informou que o boleto já foi pago.");
+  if (status === "CANCELLED" || status === "CANCELED") throw new DomainError("A Cora informou que o boleto já está cancelado.");
+  const due = texto(objeto(json.payment_terms)?.due_date).slice(0, 10);
+  const slip = objeto(objeto(json.payment_options)?.bank_slip);
+  const url = texto(slip?.url);
+  let pdfUrl: string | null = null;
+  if (url) {
+    try {
+      pdfUrl = urlPdfCora(url);
+    } catch {
+      pdfUrl = null;
+    }
+  }
+  return {
+    data: /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : pedido,
+    status: status === "LATE" ? "atrasado" : status === "OPEN" || status === "DRAFT" || status === "IN_PAYMENT" ? "aberto" : null,
+    coraStatus: status || null,
+    linha: texto(slip?.digitable) || null,
+    codigoBarras: texto(slip?.barcode) || null,
+    pix: texto(objeto(json.pix)?.emv) || null,
+    pdfUrl,
+  };
+}
+
+export async function executarVencimento(input: {
+  status: "aberto" | "atrasado" | "pago" | "cancelado";
+  atual: string;
+  data: string;
+  hoje: string;
+  chamar: (corpo: { payment_terms: { due_date: string } }) => Promise<unknown>;
+  gravar: (efeito: EfeitoVencimento) => Promise<void>;
+}): Promise<{ chamouCora: boolean; aviso: string }> {
+  exigirBoletoEditavel(input.status);
+  const pedido = pedidoVencimentoCora(input.data, input.hoje);
+  if (pedido.payment_terms.due_date === input.atual.slice(0, 10)) {
+    return { chamouCora: false, aviso: "O boleto já vence nesta data." };
+  }
+  const efeito = lerVencimentoCora(await input.chamar(pedido), pedido.payment_terms.due_date);
+  await input.gravar(efeito);
+  return { chamouCora: true, aviso: "Vencimento alterado na Cora e no título." };
+}
+
+export async function executarCancelamento(input: {
+  status: "aberto" | "atrasado" | "pago" | "cancelado";
+  chamar: () => Promise<void>;
+  gravar: () => Promise<void>;
+}): Promise<{ chamouCora: boolean; aviso: string }> {
+  exigirBoletoEditavel(input.status);
+  await input.chamar();
+  await input.gravar();
+  return { chamouCora: true, aviso: "Boleto cancelado na Cora. O título continua no ERP." };
+}
+
 export function assuntoBoleto(descricao: string): string {
   const limpo = descricao.replace(/\s+/g, " ").trim() || "AHR";
   return `Boleto ${limpo}`.slice(0, 140);

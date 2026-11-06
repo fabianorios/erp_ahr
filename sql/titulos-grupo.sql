@@ -241,8 +241,9 @@ BEGIN
     IF OLD.status <> 'previsto'
        AND (NEW.valor IS DISTINCT FROM OLD.valor
             OR NEW.competencia IS DISTINCT FROM OLD.competencia
-            OR NEW.vencimento IS DISTINCT FROM OLD.vencimento
-            OR NEW.descricao IS DISTINCT FROM OLD.descricao) THEN
+            OR NEW.descricao IS DISTINCT FROM OLD.descricao
+            OR (NEW.vencimento IS DISTINCT FROM OLD.vencimento
+                AND current_setting('erp.ajuste_vencimento', true) IS DISTINCT FROM 'on')) THEN
       RAISE EXCEPTION 'Valor, vencimento e competência só mudam enquanto o título está previsto.';
     END IF;
     IF NEW.status IS DISTINCT FROM OLD.status AND NOT (

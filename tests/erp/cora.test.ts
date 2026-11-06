@@ -9,7 +9,9 @@ import {
   decidirEmissao,
   efeitoDoWebhook,
   ehPdf,
+  executarCancelamento,
   executarEmissao,
+  executarVencimento,
   gatilhosPendentes,
   lerAvisoWebhook,
   lerConsultaCora,
@@ -334,5 +336,74 @@ describe("webhook da Cora", () => {
       ]),
       [],
     );
+  });
+});
+
+describe("vencimento e cancelamento do boleto Cora", () => {
+  it("não chama a Cora se o boleto está pago, cancelado ou a data não mudou", async () => {
+    let chamadas = 0;
+    const chamar = async () => {
+      chamadas += 1;
+      return null;
+    };
+    await assert.rejects(
+      () => executarVencimento({ status: "pago", atual: "2026-11-20", data: "2026-12-01", hoje: HOJE, chamar, gravar: async () => {} }),
+      /já foi pago/,
+    );
+    await assert.rejects(
+      () => executarVencimento({ status: "cancelado", atual: "2026-11-20", data: "2026-12-01", hoje: HOJE, chamar, gravar: async () => {} }),
+      /já está cancelado/,
+    );
+    await assert.rejects(
+      () => executarVencimento({ status: "aberto", atual: "2026-11-20", data: "2026-11-04", hoje: HOJE, chamar, gravar: async () => {} }),
+      /anterior a hoje/,
+    );
+    const igual = await executarVencimento({ status: "aberto", atual: "2026-11-20", data: "2026-11-20", hoje: HOJE, chamar, gravar: async () => {} });
+    assert.equal(igual.chamouCora, false);
+    assert.equal(chamadas, 0);
+    await assert.rejects(
+      () => executarCancelamento({ status: "pago", chamar: async () => { chamadas += 1; }, gravar: async () => {} }),
+      /já foi pago/,
+    );
+    assert.equal(chamadas, 0);
+  });
+
+  it("grava a data só depois da Cora aceitar e cancela sem apagar o título", async () => {
+    const passos: string[] = [];
+    const vencimento = await executarVencimento({
+      status: "atrasado",
+      atual: "2026-11-01",
+      data: "2026-12-15",
+      hoje: HOJE,
+      chamar: async (corpo) => {
+        passos.push("cora");
+        assert.deepEqual(corpo, { payment_terms: { due_date: "2026-12-15" } });
+        return {
+          status: "OPEN",
+          payment_terms: { due_date: "2026-12-15" },
+          payment_options: { bank_slip: { digitable: "linha-nova", barcode: "barras-novas", url: "https://storage.googleapis.com/boletos/novo.pdf" } },
+        };
+      },
+      gravar: async (efeito) => {
+        passos.push("gravar");
+        assert.equal(efeito.data, "2026-12-15");
+        assert.equal(efeito.status, "aberto");
+        assert.equal(efeito.linha, "linha-nova");
+        assert.equal(efeito.pdfUrl, "https://storage.googleapis.com/boletos/novo.pdf");
+      },
+    });
+    assert.deepEqual(passos, ["cora", "gravar"]);
+    assert.equal(vencimento.chamouCora, true);
+    const cancelado = await executarCancelamento({
+      status: "aberto",
+      chamar: async () => {
+        passos.push("cancelar");
+      },
+      gravar: async () => {
+        passos.push("marcar");
+      },
+    });
+    assert.deepEqual(passos, ["cora", "gravar", "cancelar", "marcar"]);
+    assert.match(cancelado.aviso, /título continua/);
   });
 });

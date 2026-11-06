@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AvisoConsulta, Pill, executar, reais, dataBr } from "@/components/erp/apresentacao";
-import { abrirPdfBoleto, emitirBoletoCora, enviarBoletoCora, listarContatos, type TituloItem } from "@/services/erp/api";
+import { abrirPdfBoleto, alterarVencimentoBoletoCora, cancelarBoletoCora, emitirBoletoCora, enviarBoletoCora, listarContatos, type TituloItem } from "@/services/erp/api";
 import { DomainError } from "@/services/erp/domain";
 
 const STATUS_CORA: Record<string, string> = {
@@ -29,7 +29,10 @@ export function BoletoTitulo({
   const podeEmitir = !boleto && (titulo.status === "previsto" || titulo.status === "faturado");
   const [escolhendo, setEscolhendo] = useState(false);
   const [marcados, setMarcados] = useState<string[]>([]);
+  const [vencimento, setVencimento] = useState(boleto?.vencimento ?? "");
+  const [confirmando, setConfirmando] = useState(false);
   const [ocupado, setOcupado] = useState(false);
+  const podeMexer = cora && (boleto?.status === "aberto" || boleto?.status === "atrasado");
   const contatos = useQuery({
     queryKey: ["erp", "contatos", titulo.clienteId],
     queryFn: () => listarContatos(titulo.clienteId ?? ""),
@@ -113,7 +116,59 @@ export function BoletoTitulo({
               Enviar boleto
             </Button>
           )}
+          {podeMexer && (
+            <Button variant="outline" disabled={ocupado} onClick={() => setConfirmando((atual) => !atual)}>
+              Cancelar boleto
+            </Button>
+          )}
         </div>
+        {podeMexer && (
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-sm">
+              Novo vencimento
+              <input
+                type="date"
+                className="mt-1 block rounded-md border border-input bg-card px-3 py-2 text-sm"
+                value={vencimento}
+                onChange={(evento) => setVencimento(evento.target.value)}
+              />
+            </label>
+            <Button
+              variant="outline"
+              disabled={ocupado || !vencimento}
+              onClick={() => {
+                setOcupado(true);
+                void executar(async () => {
+                  if (alterado) throw new DomainError("Salve o título antes de alterar o vencimento.");
+                  const aviso = await alterarVencimentoBoletoCora(titulo.id, vencimento);
+                  await onMudou();
+                  return aviso;
+                }, "Vencimento alterado na Cora e no título.").finally(() => setOcupado(false));
+              }}
+            >
+              Alterar vencimento
+            </Button>
+          </div>
+        )}
+        {confirmando && podeMexer && (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">O título permanece. Só o boleto é cancelado na Cora e marcado como cancelado aqui.</p>
+            <Button
+              disabled={ocupado}
+              onClick={() => {
+                setOcupado(true);
+                void executar(async () => {
+                  const aviso = await cancelarBoletoCora(titulo.id);
+                  setConfirmando(false);
+                  await onMudou();
+                  return aviso;
+                }, "Boleto cancelado.").finally(() => setOcupado(false));
+              }}
+            >
+              Confirmar cancelamento
+            </Button>
+          </div>
+        )}
         {boleto && !cora && <p className="text-sm text-muted-foreground">O título já tem boleto.</p>}
         {boleto && !boleto.temPdf && cora && (
           <p className="text-sm text-muted-foreground">O PDF deste boleto não está no servidor.</p>

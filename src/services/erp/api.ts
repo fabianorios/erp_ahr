@@ -936,6 +936,16 @@ export async function enviarBoletoCora(tituloId: string, contatoIds: string[]): 
   return corpo.aviso;
 }
 
+export async function alterarVencimentoBoletoCora(tituloId: string, vencimento: string): Promise<string | undefined> {
+  const corpo = await escrever("boleto.vencimento", { tituloId, vencimento });
+  return corpo.aviso;
+}
+
+export async function cancelarBoletoCora(tituloId: string): Promise<string | undefined> {
+  const corpo = await escrever("boleto.cancelar", { tituloId });
+  return corpo.aviso;
+}
+
 export async function abrirPdfBoleto(tituloId: string): Promise<void> {
   if (!supabase) throw new DomainError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente deste ERP.");
   const sessao = await supabase.auth.getSession();
