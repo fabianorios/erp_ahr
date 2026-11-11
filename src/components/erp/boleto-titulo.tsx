@@ -18,10 +18,12 @@ const STATUS_CORA: Record<string, string> = {
 export function BoletoTitulo({
   titulo,
   alterado,
+  erroBoleto,
   onMudou,
 }: {
   titulo: TituloItem;
   alterado: boolean;
+  erroBoleto?: string | null;
   onMudou: () => Promise<void>;
 }) {
   const boleto = titulo.boleto;
@@ -53,6 +55,7 @@ export function BoletoTitulo({
   return (
     <Card>
       <CardContent className="space-y-3 py-4">
+        {erroBoleto && <p className="text-sm text-destructive">{erroBoleto}</p>}
         <div>
           <h2 className="text-lg font-semibold">Boleto</h2>
           <p className="text-sm text-muted-foreground">

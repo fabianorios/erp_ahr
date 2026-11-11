@@ -409,6 +409,28 @@ export async function executarCancelamento(input: {
   return { chamouCora: true, aviso: "Boleto cancelado na Cora. O título continua no ERP." };
 }
 
+/** Aberto ou atrasado ainda cobra na Cora. Pago, cancelado ou sem fatura não é chamado. */
+export function boletoEmAbertoNaCora(boleto: { status: "aberto" | "atrasado" | "pago" | "cancelado"; coraId: string | null } | null): boolean {
+  if (!boleto?.coraId?.trim()) return false;
+  return boleto.status === "aberto" || boleto.status === "atrasado";
+}
+
+/** Usa o mesmo DELETE da fatura. Recusa da Cora não grava o boleto como cancelado. */
+export async function cancelarBoletoAposNfse(input: {
+  boleto: { status: "aberto" | "atrasado" | "pago" | "cancelado"; coraId: string | null } | null;
+  chamar: () => Promise<void>;
+  gravar: () => Promise<void>;
+}): Promise<{ cancelou: boolean; erro: string | null }> {
+  if (!boletoEmAbertoNaCora(input.boleto)) return { cancelou: false, erro: null };
+  try {
+    await executarCancelamento({ status: input.boleto!.status, chamar: input.chamar, gravar: input.gravar });
+    return { cancelou: true, erro: null };
+  } catch (error) {
+    const mensagem = error instanceof Error && error.message.trim() ? error.message.trim() : "A Cora não cancelou o boleto.";
+    return { cancelou: false, erro: mensagem };
+  }
+}
+
 export function assuntoBoleto(descricao: string): string {
   const limpo = descricao.replace(/\s+/g, " ").trim() || "AHR";
   return `Boleto ${limpo}`.slice(0, 140);

@@ -9,6 +9,7 @@ import {
   decidirEmissao,
   efeitoDoWebhook,
   ehPdf,
+  cancelarBoletoAposNfse,
   executarCancelamento,
   executarEmissao,
   executarEnvioKit,
@@ -407,6 +408,59 @@ describe("vencimento e cancelamento do boleto Cora", () => {
     });
     assert.deepEqual(passos, ["cora", "gravar", "cancelar", "marcar"]);
     assert.match(cancelado.aviso, /título continua/);
+  });
+});
+
+describe("boleto Cora depois da NFS-e cancelada", () => {
+  it("cancela o boleto aberto com o DELETE e não grava se a Cora recusar", async () => {
+    const passos: string[] = [];
+    const aceito = await cancelarBoletoAposNfse({
+      boleto: { status: "aberto", coraId: "inv_zXmtr2n0RpmIwdjfnNokhA" },
+      chamar: async () => {
+        passos.push("delete");
+      },
+      gravar: async () => {
+        passos.push("gravar");
+      },
+    });
+    assert.equal(aceito.cancelou, true);
+    assert.equal(aceito.erro, null);
+    assert.deepEqual(passos, ["delete", "gravar"]);
+
+    const recusa = await cancelarBoletoAposNfse({
+      boleto: { status: "atrasado", coraId: "inv_zXmtr2n0RpmIwdjfnNokhA" },
+      chamar: async () => {
+        throw new DomainError("A Cora não cancelou o boleto: fatura em pagamento");
+      },
+      gravar: async () => {
+        passos.push("gravar-recusa");
+      },
+    });
+    assert.equal(recusa.cancelou, false);
+    assert.equal(recusa.erro, "A Cora não cancelou o boleto: fatura em pagamento");
+    assert.deepEqual(passos, ["delete", "gravar"]);
+
+    const pago = await cancelarBoletoAposNfse({
+      boleto: { status: "pago", coraId: "inv_zXmtr2n0RpmIwdjfnNokhA" },
+      chamar: async () => {
+        passos.push("pago");
+      },
+      gravar: async () => {
+        passos.push("gravar-pago");
+      },
+    });
+    assert.deepEqual(pago, { cancelou: false, erro: null });
+    const semBoleto = await cancelarBoletoAposNfse({
+      boleto: null,
+      chamar: async () => {
+        passos.push("vazio");
+      },
+      gravar: async () => {
+        passos.push("gravar-vazio");
+      },
+    });
+    assert.deepEqual(semBoleto, { cancelou: false, erro: null });
+    assert.deepEqual(passos, ["delete", "gravar"]);
   });
 });
 

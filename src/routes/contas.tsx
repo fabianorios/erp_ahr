@@ -12,7 +12,7 @@ import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
 import { abrirPdfBoleto, abrirPdfNfse, atualizarTitulo, buscarPdfNfse, cancelarNfseNacional, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
-import { reaisToCents } from "@/services/erp/domain";
+import { DomainError, reaisToCents } from "@/services/erp/domain";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
 const vazio = {
@@ -47,6 +47,7 @@ export function ContasPage() {
   const [motivoNfse, setMotivoNfse] = useState("1");
   const [justificativaNfse, setJustificativaNfse] = useState("");
   const [ocupadoNfse, setOcupadoNfse] = useState(false);
+  const [erroBoleto, setErroBoleto] = useState<string | null>(null);
 
   const origem = form.modo === "texto" ? form.texto : form.modo;
   const quantidade = Math.max(1, Number(form.quantidade) || 1);
@@ -88,6 +89,7 @@ export function ContasPage() {
     setCancelandoNfse(false);
     setMotivoNfse("1");
     setJustificativaNfse("");
+    setErroBoleto(null);
   }, [id]);
 
   useEffect(() => {
@@ -367,7 +369,7 @@ export function ContasPage() {
                 )}
                 {cancelandoNfse && (
                   <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">O boleto Cora não é cancelado.</p>
+                    <p className="text-sm text-muted-foreground">Se o boleto Cora ainda estiver em aberto ou atrasado, ele também é cancelado.</p>
                     <Campo label="Motivo">
                       <Select value={motivoNfse} onValueChange={setMotivoNfse}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
@@ -388,9 +390,15 @@ export function ContasPage() {
                         onClick={() => {
                           setOcupadoNfse(true);
                           void executar(async () => {
-                            await cancelarNfseNacional(editando, { motivo: motivoNfse, justificativa: justificativaNfse });
+                            const resultado = await cancelarNfseNacional(editando, { motivo: motivoNfse, justificativa: justificativaNfse });
                             setCancelandoNfse(false);
                             await recarregar();
+                            if (resultado.erroBoleto) {
+                              setErroBoleto(resultado.erroBoleto);
+                              throw new DomainError(resultado.erroBoleto);
+                            }
+                            setErroBoleto(null);
+                            return resultado.aviso;
                           }, "NFS-e cancelada").finally(() => setOcupadoNfse(false));
                         }}
                       >
@@ -427,7 +435,7 @@ export function ContasPage() {
           Excluir título
         </Button>
       )}
-      {canEdit && editando && <BoletoTitulo titulo={editando} alterado={alterado} onMudou={recarregar} />}
+      {canEdit && editando && <BoletoTitulo titulo={editando} alterado={alterado} erroBoleto={erroBoleto} onMudou={recarregar} />}
     </div>
   );
 }

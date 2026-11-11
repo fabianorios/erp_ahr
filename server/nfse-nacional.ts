@@ -23,7 +23,7 @@ import {
   type PedidoNfse,
   type TituloNascido,
 } from "../src/services/erp/nfse-nacional.ts";
-import { diretorioNfse, gravarPdfEm } from "./boleto-cora.ts";
+import { cancelarBoletoAbertoDoTitulo, diretorioNfse, gravarPdfEm } from "./boleto-cora.ts";
 import { pdfDaNota } from "./danfse-pdf.ts";
 
 type Banco = SupabaseClient;
@@ -858,8 +858,8 @@ function postarEvento(base: string, chaveNfse: string, certificado: string, chav
   });
 }
 
-/** Cancela a NFS-e autorizada no Emissor Nacional. O boleto não entra nesta rotina. */
-export async function cancelarNfseDoTitulo(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {
+/** Cancela a NFS-e autorizada no Emissor Nacional. Com a nota aceita, cancela o boleto Cora que ainda está em aberto. */
+export async function cancelarNfseDoTitulo(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string; aviso?: string; erroBoleto?: string }> {
   const tituloId = texto(dados, "tituloId").trim();
   if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
   const { data, error } = await db.from("erp_nfse").select("id, status, id_externo").eq("conta_receber_id", tituloId).maybeSingle();
@@ -891,7 +891,10 @@ export async function cancelarNfseDoTitulo(db: Banco, dados: Record<string, unkn
       .select("id");
     if (gravacao || !gravado?.length) throw new DomainError("O Emissor Nacional cancelou a NFS-e, mas o status não foi gravado.");
   }, resposta.status, resposta.texto);
-  return { id: nfseId };
+  const boleto = await cancelarBoletoAbertoDoTitulo(db, tituloId);
+  if (boleto.erro) return { id: nfseId, erroBoleto: boleto.erro };
+  if (boleto.cancelou) return { id: nfseId, aviso: "NFS-e cancelada. O boleto Cora também foi cancelado." };
+  return { id: nfseId, aviso: "NFS-e cancelada." };
 }
 
 type RespostaHttp = { status: number; corpo: Buffer; cookies: string[]; location: string; jar: string[]; url: string };

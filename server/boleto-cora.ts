@@ -11,6 +11,7 @@ import {
   chaveWebhook,
   efeitoDoWebhook,
   ehPdf,
+  cancelarBoletoAposNfse,
   executarCancelamento,
   executarEnvioKit,
   executarEmissao,
@@ -242,6 +243,17 @@ export async function cancelarBoletoDoTitulo(db: Banco, tituloId: string): Promi
   return { aviso: resultado.aviso };
 }
 
+/** DELETE da fatura Cora só quando o boleto ainda está aberto ou atrasado. Recusa não muda o status. */
+export async function cancelarBoletoAbertoDoTitulo(db: Banco, tituloId: string): Promise<{ cancelou: boolean; erro: string | null }> {
+  const boleto = await boletoAbertoNaCora(db, tituloId);
+  if (!boleto) return { cancelou: false, erro: null };
+  return cancelarBoletoAposNfse({
+    boleto,
+    chamar: () => cancelarNaCora(boleto.coraId),
+    gravar: () => marcarBoletoCancelado(db, boleto.id),
+  });
+}
+
 async function garantirColunas(db: Banco): Promise<void> {
   const { error } = await db.from("erp_boletos").select("cora_invoice_id, linha_digitavel, codigo_barras, pix_emv, pdf_path, cora_status").limit(1);
   if (colunaAusente(error)) throw new DomainError(MENSAGEM_SQL);
@@ -418,6 +430,16 @@ async function exigirRotinaVencimento(db: Banco): Promise<void> {
   if (/42883|could not find the function|schema cache/i.test(texto)) {
     throw new DomainError("Falta o SQL do vencimento do boleto Cora. Rode sql/boleto-cora-vencimento.sql no projeto do ERP.");
   }
+}
+
+async function boletoAbertoNaCora(db: Banco, tituloId: string): Promise<{ id: string; status: "aberto" | "atrasado"; coraId: string } | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(tituloId)) return null;
+  const { data, error } = await db.from("erp_boletos").select("id, status, cora_invoice_id").eq("conta_receber_id", tituloId).maybeSingle();
+  if (error || !data?.id) return null;
+  const status = statusBoleto(data.status);
+  const coraId = typeof data.cora_invoice_id === "string" ? data.cora_invoice_id.trim() : "";
+  if (!status || !coraId || (status !== "aberto" && status !== "atrasado")) return null;
+  return { id: String(data.id), status, coraId };
 }
 
 async function boletoCoraDoTitulo(db: Banco, tituloId: string): Promise<{ id: string; status: "aberto" | "atrasado" | "pago" | "cancelado"; vencimento: string; coraId: string }> {

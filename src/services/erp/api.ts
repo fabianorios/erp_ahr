@@ -96,7 +96,7 @@ async function ler<T>(query: PromiseLike<Result>): Promise<T[]> {
   return (data ?? []) as T[];
 }
 
-async function escrever(acao: string, dados: unknown): Promise<{ id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean }> {
+async function escrever(acao: string, dados: unknown): Promise<{ id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; erroBoleto?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean }> {
   if (!supabase) throw new DomainError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente deste ERP.");
   const sessao = await supabase.auth.getSession();
   const token = sessao.data.session?.access_token;
@@ -106,7 +106,7 @@ async function escrever(acao: string, dados: unknown): Promise<{ id?: string; me
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ acao, dados }),
   });
-  const corpo = (await resposta.json().catch(() => ({}))) as { id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean };
+  const corpo = (await resposta.json().catch(() => ({}))) as { id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; erroBoleto?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean };
   if (!resposta.ok) throw new DomainError(corpo.message ?? "Não foi possível gravar.");
   return corpo;
 }
@@ -953,14 +953,18 @@ export async function anularNfse(titulo: TituloItem): Promise<void> {
   await escrever("nfse.anular", { tituloId: titulo.id });
 }
 
-export async function cancelarNfseNacional(titulo: TituloItem, input: { motivo: string; justificativa: string }): Promise<void> {
+export async function cancelarNfseNacional(
+  titulo: TituloItem,
+  input: { motivo: string; justificativa: string },
+): Promise<{ aviso?: string; erroBoleto?: string }> {
   validarPedidoCancelamento({
     status: titulo.nfse?.status ?? "ausente",
     chave: titulo.nfse?.chave ?? "",
     motivo: input.motivo,
     justificativa: input.justificativa,
   });
-  await escrever("nfse.cancelar", { tituloId: titulo.id, motivo: input.motivo, justificativa: input.justificativa });
+  const corpo = await escrever("nfse.cancelar", { tituloId: titulo.id, motivo: input.motivo, justificativa: input.justificativa });
+  return { aviso: corpo.aviso, erroBoleto: corpo.erroBoleto };
 }
 
 export async function emitirBoletoCora(tituloId: string): Promise<string | undefined> {

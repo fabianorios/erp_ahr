@@ -102,7 +102,7 @@ export async function executarGravacao(
   db: Banco,
   acao: string,
   bruto: unknown,
-): Promise<{ id?: string; aviso?: string; clientes?: ClienteLista[]; contatos?: ContatoLista[]; titulos?: unknown[] }> {
+): Promise<{ id?: string; aviso?: string; erroBoleto?: string; clientes?: ClienteLista[]; contatos?: ContatoLista[]; titulos?: unknown[] }> {
   const dados = bruto == null ? {} : dadosDe(bruto);
   switch (acao) {
     case "cliente.listar":
