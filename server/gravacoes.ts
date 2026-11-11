@@ -49,7 +49,7 @@ import {
 } from "../src/services/erp/domain.ts";
 import { validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
 import { alterarVencimentoDoTitulo, cancelarBoletoDoTitulo, emitirBoletoDoTitulo, enviarBoletoDoTitulo, enviarKitDoTitulo, situacaoKit } from "./boleto-cora.ts";
-import { emitirNfseECriarTitulo, gravarPdfDaNota } from "./nfse-nacional.ts";
+import { cancelarNfseDoTitulo, emitirNfseECriarTitulo, gravarPdfDaNota } from "./nfse-nacional.ts";
 
 type Banco = SupabaseClient;
 
@@ -197,6 +197,8 @@ export async function executarGravacao(
       return salvarNfse(db, dados);
     case "nfse.anular":
       return anularNfse(db, dados);
+    case "nfse.cancelar":
+      return cancelarNfseDoTitulo(db, dados);
     case "nfse.emitir":
       return emitirNfseECriarTitulo(db, dados);
     case "nfse.pdf":
@@ -1250,9 +1252,16 @@ async function salvarNfse(db: Banco, dados: Record<string, unknown>): Promise<{ 
 
 async function anularNfse(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {
   const tituloId = idDe(dados.tituloId, "Título");
-  const { nfse } = await documentosDoTitulo(db, tituloId);
+  const { data: titulo, error: tituloErro } = await db.from("erp_contas_receber").select("id").eq("id", tituloId).maybeSingle();
+  falhar(tituloErro);
+  if (!titulo) throw new DomainError("Título não encontrado.");
+  const { data: nfse, error: leitura } = await db.from("erp_nfse").select("id, status, id_externo").eq("conta_receber_id", tituloId).maybeSingle();
+  falhar(leitura);
   cancelarNfse(nfse?.status ?? "ausente");
   if (!nfse) return {};
+  if (typeof nfse.id_externo === "string" && /^\d{50}$/.test(nfse.id_externo.trim())) {
+    throw new DomainError("Cancele esta NFS-e no Emissor Nacional, com motivo e justificativa.");
+  }
   const { error } = await db.from("erp_nfse").update({ status: "cancelada" }).eq("id", nfse.id);
   falhar(error);
   return { id: nfse.id };

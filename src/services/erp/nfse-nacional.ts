@@ -292,6 +292,108 @@ export function lerNotaAutorizada(status: number, corpo: string, descricaoPedida
   };
 }
 
+/** Evento 101101 do Anexo II / tiposEventos v1.01. cMotivo 1 = Erro na Emissão; 2 = Serviço não Prestado. */
+export const TIPO_EVENTO_CANCELAMENTO_NFSE = "101101";
+
+export type PedidoCancelamentoNfse = {
+  chave: string;
+  cnpjAutor: string;
+  motivo: "1" | "2";
+  justificativa: string;
+  ambiente: 1 | 2;
+  emitidoEm: string;
+};
+
+export function idPedidoCancelamento(chave: string): string {
+  if (!/^\d{50}$/.test(chave)) throw new DomainError("Esta NFS-e não tem chave de acesso.");
+  return `PRE${chave}${TIPO_EVENTO_CANCELAMENTO_NFSE}`;
+}
+
+export function validarPedidoCancelamento(input: {
+  status: string;
+  chave: string;
+  motivo: string;
+  justificativa: string;
+}): { chave: string; motivo: "1" | "2"; justificativa: string } {
+  if (input.status !== "informada") throw new DomainError("Não há NFS-e informada para cancelar.");
+  const chave = input.chave.trim();
+  idPedidoCancelamento(chave);
+  const motivo = input.motivo.trim();
+  if (motivo !== "1" && motivo !== "2") throw new DomainError("Escolha o motivo do cancelamento.");
+  const justificativa = input.justificativa.trim();
+  if (justificativa.length < 15) throw new DomainError("A justificativa precisa ter no mínimo 15 caracteres.");
+  if (justificativa.length > 255) throw new DomainError("A justificativa passou de 255 caracteres.");
+  return { chave, motivo, justificativa };
+}
+
+export function validarCancelamentoNfse(input: Omit<PedidoCancelamentoNfse, "motivo"> & { motivo: string }): PedidoCancelamentoNfse {
+  const pedido = validarPedidoCancelamento({ status: "informada", ...input });
+  const cnpjAutor = somenteDigitos(input.cnpjAutor);
+  if (cnpjAutor.length !== 14) throw new DomainError("O CNPJ do prestador não está configurado.");
+  if (input.ambiente !== 1 && input.ambiente !== 2) throw new DomainError("O ambiente do Emissor Nacional é inválido.");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-03:00$/.test(input.emitidoEm)) throw new DomainError("A data do evento é inválida.");
+  return { ...pedido, cnpjAutor, ambiente: input.ambiente, emitidoEm: input.emitidoEm };
+}
+
+/** pedRegEvento v1.01. O Id é PRE + chave (50) + 101101. O XSD não tem nPedRegEvento nem tpEvento solto. */
+export function montarEventoCancelamento(input: Omit<PedidoCancelamentoNfse, "motivo"> & { motivo: string }): string {
+  const pronto = validarCancelamentoNfse(input);
+  const id = idPedidoCancelamento(pronto.chave);
+  return `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<pedRegEvento xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">` +
+    `<infPedReg Id="${id}">` +
+    `<tpAmb>${pronto.ambiente}</tpAmb>` +
+    `<verAplic>ERP-AHR-1.0</verAplic>` +
+    `<dhEvento>${xml(pronto.emitidoEm)}</dhEvento>` +
+    `<CNPJAutor>${pronto.cnpjAutor}</CNPJAutor>` +
+    `<chNFSe>${pronto.chave}</chNFSe>` +
+    `<e101101>` +
+    `<xDesc>Cancelamento de NFS-e</xDesc>` +
+    `<cMotivo>${pronto.motivo}</cMotivo>` +
+    `<xMotivo>${xml(pronto.justificativa)}</xMotivo>` +
+    `</e101101>` +
+    `</infPedReg></pedRegEvento>`;
+}
+
+function textoCampo(item: Record<string, unknown>, ...nomes: string[]): string {
+  for (const nome of nomes) {
+    const valor = item[nome];
+    if (typeof valor === "string" && valor.trim()) return valor.trim();
+  }
+  return "";
+}
+
+function errosDoRetorno(json: Record<string, unknown>): { codigo: string; descricao: string }[] {
+  const bruto = json.erro ?? json.erros ?? json.Erro ?? json.Erros;
+  if (!Array.isArray(bruto)) return [];
+  return bruto.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const registro = item as Record<string, unknown>;
+    const codigo = textoCampo(registro, "Codigo", "codigo");
+    const descricao = textoCampo(registro, "Descricao", "descricao", "Mensagem", "mensagem");
+    const complemento = textoCampo(registro, "Complemento", "complemento");
+    const mensagem = [descricao, complemento].filter((parte, indice, lista) => parte && lista.indexOf(parte) === indice).join(" ");
+    if (!codigo && !mensagem) return [];
+    return [{ codigo, descricao: mensagem }];
+  });
+}
+
+/** Aceita só resposta 2xx com o evento e101101 e sem lista de erro. Recusa não altera a nota. */
+export function lerCancelamentoAceito(status: number, corpo: string): void {
+  let json: Record<string, unknown> = {};
+  try {
+    json = JSON.parse(corpo) as Record<string, unknown>;
+  } catch {
+    json = {};
+  }
+  const evento = typeof json.eventoXml === "string" ? json.eventoXml : "";
+  const erros = errosDoRetorno(json);
+  if (status >= 200 && status < 300 && /<(?:[\w.-]+:)?e101101[\s>]/.test(evento) && erros.length === 0) return;
+  const primeiro = erros[0];
+  const detalhe = primeiro ? [primeiro.codigo, primeiro.descricao].filter(Boolean).join(": ") : "";
+  throw new DomainError(detalhe ? `O Emissor Nacional recusou o cancelamento. ${detalhe}` : "O Emissor Nacional recusou o cancelamento.");
+}
+
 /** A nota autorizada é a origem do título. Sem nota, esta função não é chamada. */
 export function tituloDaNota(pedido: PedidoNfse, nota: NotaAutorizada): TituloNascido {
   const pronto = validarPedidoNfse(pedido);

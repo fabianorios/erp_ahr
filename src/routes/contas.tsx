@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { AvisoConsulta, Campo, CampoDinheiro, TituloPagina, dataBr, executar, reaisInput } from "@/components/erp/apresentacao";
 import { AtalhoConsulta } from "@/components/erp/atalho-consulta";
 import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
-import { abrirPdfBoleto, abrirPdfNfse, atualizarTitulo, buscarPdfNfse, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
+import { abrirPdfBoleto, abrirPdfNfse, atualizarTitulo, buscarPdfNfse, cancelarNfseNacional, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
 import { reaisToCents } from "@/services/erp/domain";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
@@ -42,6 +43,10 @@ export function ContasPage() {
   const aberto = useQuery({ queryKey: ["erp", "titulos", "um", id], queryFn: () => obterTitulo(id ?? ""), enabled: Boolean(id) });
   const [form, setForm] = useState(vazio);
   const [editando, setEditando] = useState<TituloItem | null>(null);
+  const [cancelandoNfse, setCancelandoNfse] = useState(false);
+  const [motivoNfse, setMotivoNfse] = useState("1");
+  const [justificativaNfse, setJustificativaNfse] = useState("");
+  const [ocupadoNfse, setOcupadoNfse] = useState(false);
 
   const origem = form.modo === "texto" ? form.texto : form.modo;
   const quantidade = Math.max(1, Number(form.quantidade) || 1);
@@ -78,6 +83,12 @@ export function ContasPage() {
       texto: modo === "texto" ? titulo.origem ?? "" : "",
     });
   }
+
+  useEffect(() => {
+    setCancelandoNfse(false);
+    setMotivoNfse("1");
+    setJustificativaNfse("");
+  }, [id]);
 
   useEffect(() => {
     if (!id) {
@@ -324,12 +335,12 @@ export function ContasPage() {
             <p className="text-sm">Número {editando.nfse.numero}</p>
             <p className="text-sm">Status {editando.nfse.status}</p>
             <p className="text-sm">Emissão {dataBr(editando.nfse.dataEmissao)}</p>
-            {editando.nfse.temPdf && (
+            {editando.nfse.status === "informada" && editando.nfse.temPdf && (
               <Button type="button" variant="outline" onClick={() => executar(() => abrirPdfNfse(editando.id), "PDF da NFS-e aberto.")}>
                 Abrir PDF da NFS-e
               </Button>
             )}
-            {!editando.nfse.temPdf && (
+            {editando.nfse.status === "informada" && !editando.nfse.temPdf && (
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">O PDF desta NFS-e não está no servidor.</p>
                 {canEdit && (
@@ -344,6 +355,52 @@ export function ContasPage() {
                   >
                     Buscar PDF
                   </Button>
+                )}
+              </div>
+            )}
+            {canEdit && editando.nfse.status === "informada" && editando.nfse.chave && (
+              <div className="space-y-3 pt-2">
+                {!cancelandoNfse && (
+                  <Button type="button" variant="outline" disabled={ocupadoNfse} onClick={() => setCancelandoNfse(true)}>
+                    Cancelar NFS-e
+                  </Button>
+                )}
+                {cancelandoNfse && (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">O boleto Cora não é cancelado.</p>
+                    <Campo label="Motivo">
+                      <Select value={motivoNfse} onValueChange={setMotivoNfse}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">Erro na emissão</SelectItem>
+                          <SelectItem value="2">Serviço não prestado</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Campo>
+                    <Campo label="Justificativa">
+                      <Textarea value={justificativaNfse} onChange={(event) => setJustificativaNfse(event.target.value)} />
+                    </Campo>
+                    <p className="text-sm text-muted-foreground">No mínimo 15 caracteres.</p>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        disabled={ocupadoNfse}
+                        onClick={() => {
+                          setOcupadoNfse(true);
+                          void executar(async () => {
+                            await cancelarNfseNacional(editando, { motivo: motivoNfse, justificativa: justificativaNfse });
+                            setCancelandoNfse(false);
+                            await recarregar();
+                          }, "NFS-e cancelada").finally(() => setOcupadoNfse(false));
+                        }}
+                      >
+                        Confirmar cancelamento
+                      </Button>
+                      <Button type="button" variant="ghost" disabled={ocupadoNfse} onClick={() => setCancelandoNfse(false)}>
+                        Voltar
+                      </Button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}

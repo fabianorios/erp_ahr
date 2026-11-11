@@ -61,6 +61,7 @@ import {
   transicionarProposta,
 } from "@/services/erp/domain";
 import type { PainelAssinaturaDados, TipoDocumentoAssinatura } from "@/services/erp/assinatura";
+import { validarPedidoCancelamento } from "@/services/erp/nfse-nacional";
 
 export { DomainError } from "@/services/erp/domain";
 
@@ -638,6 +639,7 @@ export type TituloItem = {
     dataEmissao: string;
     status: NfseStatus;
     codigo: string | null;
+    chave: string | null;
     temPdf: boolean;
   } | null;
   boleto: {
@@ -695,6 +697,7 @@ function mapTitulo(row: any): TituloItem {
           dataEmissao: dia(nfse.data_emissao),
           status: nfse.status,
           codigo: nfse.codigo_verificacao,
+          chave: typeof nfse.id_externo === "string" && /^\d{50}$/.test(nfse.id_externo) ? nfse.id_externo : null,
           temPdf: typeof nfse.pdf_path === "string" && nfse.pdf_path.trim().length > 0,
         }
       : null,
@@ -946,7 +949,18 @@ export async function emitirNfNacional(input: {
 
 export async function anularNfse(titulo: TituloItem): Promise<void> {
   cancelarNfse(titulo.nfse?.status ?? "ausente");
+  if (titulo.nfse?.chave) throw new DomainError("Cancele esta NFS-e no Emissor Nacional, com motivo e justificativa.");
   await escrever("nfse.anular", { tituloId: titulo.id });
+}
+
+export async function cancelarNfseNacional(titulo: TituloItem, input: { motivo: string; justificativa: string }): Promise<void> {
+  validarPedidoCancelamento({
+    status: titulo.nfse?.status ?? "ausente",
+    chave: titulo.nfse?.chave ?? "",
+    motivo: input.motivo,
+    justificativa: input.justificativa,
+  });
+  await escrever("nfse.cancelar", { tituloId: titulo.id, motivo: input.motivo, justificativa: input.justificativa });
 }
 
 export async function emitirBoletoCora(tituloId: string): Promise<string | undefined> {

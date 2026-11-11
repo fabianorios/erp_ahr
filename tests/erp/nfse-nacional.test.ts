@@ -11,15 +11,19 @@ import forge from "node-forge";
 import {
   ambienteNfse,
   idDps,
+  idPedidoCancelamento,
   codigoTributacaoNacional,
   instanteBrasil,
+  lerCancelamentoAceito,
   lerNotaAutorizada,
   montarDps,
+  montarEventoCancelamento,
   tituloDaNota,
   validarBaseSefin,
+  type PedidoCancelamentoNfse,
   type PedidoNfse,
 } from "../../src/services/erp/nfse-nacional.ts";
-import { abrirPfx, aplicarNota, assinarDps, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, deveSeguirRedirecionamentoDanfse, enderecoDanfse, enderecoLoginDanfse, falhaPdfDanfse, hrefImpressaoNfse, incorporarXml, pdfDaPaginaNfse, pdfDanfse } from "../../server/nfse-nacional.ts";
+import { abrirPfx, aplicarCancelamento, aplicarNota, assinarDps, assinarEvento, certificadoDaEmissao, certificadoDaGestao, cookiesSessao, deveSeguirRedirecionamentoDanfse, enderecoDanfse, enderecoLoginDanfse, falhaPdfDanfse, hrefImpressaoNfse, incorporarXml, pdfDaPaginaNfse, pdfDanfse } from "../../server/nfse-nacional.ts";
 
 const CLIENTE = "11111111-1111-4111-8111-111111111111";
 const CENTRO = "22222222-2222-4222-8222-222222222222";
@@ -264,5 +268,73 @@ describe("emissão no Emissor Nacional", () => {
     const assinado = assinarDps(montarDps(pedido()), chave, certificado);
     assert.match(assinado, /<Signature/);
     assert.match(assinado, /Consultoria mensal/);
+  });
+});
+
+function cancelamento(parcial: Partial<PedidoCancelamentoNfse> = {}): PedidoCancelamentoNfse {
+  return {
+    chave: CHAVE,
+    cnpjAutor: "50.516.724/0001-60",
+    motivo: "1",
+    justificativa: "Erro na descrição do serviço prestado",
+    ambiente: 1,
+    emitidoEm: "2026-11-11T08:15:00-03:00",
+    ...parcial,
+  };
+}
+
+describe("evento de cancelamento da NFS-e", () => {
+  it("monta o XML 101101 do leiaute v1.01 sem chamar a Sefin", () => {
+    const id = idPedidoCancelamento(CHAVE);
+    assert.equal(id, `PRE${CHAVE}101101`);
+    assert.match(id, /^PRE\d{56}$/);
+    const xml = montarEventoCancelamento(cancelamento());
+    assert.match(xml, /<pedRegEvento xmlns="http:\/\/www.sped.fazenda.gov.br\/nfse" versao="1.01">/);
+    assert.match(xml, new RegExp(`<infPedReg Id="${id}">`));
+    assert.match(xml, /<tpAmb>1<\/tpAmb><verAplic>ERP-AHR-1.0<\/verAplic><dhEvento>2026-11-11T08:15:00-03:00<\/dhEvento>/);
+    assert.match(xml, /<CNPJAutor>50516724000160<\/CNPJAutor>/);
+    assert.match(xml, new RegExp(`<chNFSe>${CHAVE}<\\/chNFSe>`));
+    assert.match(xml, /<e101101><xDesc>Cancelamento de NFS-e<\/xDesc><cMotivo>1<\/cMotivo><xMotivo>Erro na descrição do serviço prestado<\/xMotivo><\/e101101>/);
+    assert.doesNotMatch(xml, /nPedRegEvento|<tpEvento>/);
+    const servico = montarEventoCancelamento(cancelamento({ motivo: "2", justificativa: "O serviço desta nota não foi prestado" }));
+    assert.match(servico, /<cMotivo>2<\/cMotivo><xMotivo>O serviço desta nota não foi prestado<\/xMotivo>/);
+    const escapado = montarEventoCancelamento(cancelamento({ justificativa: "Erro <na> emissão & \"nota\" do cliente" }));
+    assert.match(escapado, /<xMotivo>Erro &lt;na&gt; emissão &amp; &quot;nota&quot; do cliente<\/xMotivo>/);
+    assert.throws(() => montarEventoCancelamento(cancelamento({ justificativa: "curta demais" })), /15 caracteres/);
+    assert.throws(() => montarEventoCancelamento({ ...cancelamento(), motivo: "9" }), /motivo/);
+    assert.throws(() => montarEventoCancelamento(cancelamento({ chave: "123" })), /chave de acesso/);
+  });
+
+  it("assina o evento sem enviar e só grava quando o portal aceita", async () => {
+    const par = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const chave = par.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const certificado = par.publicKey.export({ type: "spki", format: "pem" }).toString();
+    const xml = montarEventoCancelamento(cancelamento());
+    const assinado = assinarEvento(xml, chave, certificado);
+    assert.match(assinado, /<Signature/);
+    assert.match(assinado, new RegExp(`URI="#PRE${CHAVE}101101"`));
+    assert.match(assinado, /<e101101>/);
+    assert.match(assinado, /<cMotivo>1<\/cMotivo>/);
+    assert.doesNotMatch(assinado, /sefin\.nfse\.gov\.br/);
+
+    let gravou = false;
+    const recusa = JSON.stringify({ erro: [{ Codigo: "E0840", Descricao: "Evento de cancelamento não permitido" }] });
+    await assert.rejects(() => aplicarCancelamento(async () => {
+      gravou = true;
+    }, 400, recusa), (error: unknown) => {
+      assert.ok(error instanceof DomainError);
+      assert.match(error.message, /E0840/);
+      assert.match(error.message, /Evento de cancelamento não permitido/);
+      return true;
+    });
+    assert.equal(gravou, false);
+    assert.throws(() => lerCancelamentoAceito(201, JSON.stringify({ eventoXml: "<pedRegEvento></pedRegEvento>" })), /recusou o cancelamento/);
+    assert.doesNotThrow(() => lerCancelamentoAceito(201, JSON.stringify({ eventoXml: "<nfse:e101101 xmlns:nfse=\"http://www.sped.fazenda.gov.br/nfse\"></nfse:e101101>" })));
+
+    const evento = `<pedRegEvento><infPedReg><e101101><xDesc>Cancelamento de NFS-e</xDesc></e101101></infPedReg></pedRegEvento>`;
+    await aplicarCancelamento(async () => {
+      gravou = true;
+    }, 201, JSON.stringify({ eventoXmlGZipB64: gzipSync(Buffer.from(evento)).toString("base64") }));
+    assert.equal(gravou, true);
   });
 });

@@ -143,7 +143,7 @@ export function PainelTitulos({
                 {item.status === "faturado" && (
                   <>
                     {item.nfse?.status !== "informada" && <Button variant="outline" size="sm" onClick={() => abrir("nfse", item)}>Registrar NFS-e</Button>}
-                    {item.nfse?.status === "informada" && <Button variant="ghost" size="sm" onClick={() => executar(() => anularNfse(item).then(onChange), "NFS-e cancelada")}>Cancelar NFS-e</Button>}
+                    {item.nfse?.status === "informada" && !item.nfse.chave && <Button variant="ghost" size="sm" onClick={() => executar(() => anularNfse(item).then(onChange), "NFS-e cancelada")}>Cancelar NFS-e</Button>}
                     {!item.boleto && <Button variant="outline" size="sm" onClick={() => abrir("boleto", item)}>Registrar boleto</Button>}
                     {item.boleto && (item.boleto.status === "aberto" || item.boleto.status === "atrasado") && (
                       <>

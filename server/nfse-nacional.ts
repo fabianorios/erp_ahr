@@ -11,10 +11,14 @@ import {
   ambienteNfse,
   codigoIbgeConhecido,
   instanteBrasil,
+  lerCancelamentoAceito,
   lerNotaAutorizada,
   montarDps,
+  montarEventoCancelamento,
   numeroDps,
   tituloDaNota,
+  validarCancelamentoNfse,
+  validarPedidoCancelamento,
   validarPedidoNfse,
   type PedidoNfse,
   type TituloNascido,
@@ -71,6 +75,55 @@ export function assinarDps(xml: string, chave: string, certificado: string): str
     location: { reference: "//*[local-name(.)='infDPS']", action: "after" },
   });
   return assinatura.getSignedXml();
+}
+
+/** Assina o pedRegEvento no mesmo padrão da DPS: RSA-SHA256, C14N exclusiva, assinatura depois de infPedReg. */
+export function assinarEvento(xml: string, chave: string, certificado: string): string {
+  const id = / Id="(PRE\d{56})"/.exec(xml)?.[1];
+  if (!id) throw new DomainError("O evento de cancelamento ficou sem identificador.");
+  const assinatura = new SignedXml({
+    privateKey: chave,
+    publicCert: certificado,
+    signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+    canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+  });
+  assinatura.addReference({
+    xpath: `//*[@Id='${id}']`,
+    uri: `#${id}`,
+    digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+    transforms: [
+      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+      "http://www.w3.org/2001/10/xml-exc-c14n#",
+    ],
+  });
+  assinatura.computeSignature(xml, {
+    location: { reference: "//*[local-name(.)='infPedReg']", action: "after" },
+  });
+  return assinatura.getSignedXml();
+}
+
+export function incorporarEvento(corpo: string): string {
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(corpo) as Record<string, unknown>;
+  } catch {
+    return corpo;
+  }
+  if (typeof json.eventoXml === "string" && json.eventoXml.trim()) return corpo;
+  const gzip = typeof json.eventoXmlGZipB64 === "string" ? json.eventoXmlGZipB64 : "";
+  if (!gzip) return corpo;
+  try {
+    json.eventoXml = gunzipSync(Buffer.from(gzip, "base64")).toString("utf8");
+  } catch {
+    throw new DomainError("O Emissor Nacional devolveu um evento ilegível.");
+  }
+  return JSON.stringify(json);
+}
+
+/** Grava o cancelamento só depois que o portal aceita. Recusa não chama o gravador. */
+export async function aplicarCancelamento(gravar: () => Promise<void>, status: number, corpo: string): Promise<void> {
+  lerCancelamentoAceito(status, incorporarEvento(corpo));
+  await gravar();
 }
 
 /** Grava o título só depois da nota autorizada. Rejeição não chama o gravador. */
@@ -496,9 +549,10 @@ function gravador(db: Banco): GravadorNfse {
 }
 
 export async function gravarPdfDaNota(db: Banco, tituloId: string): Promise<void> {
-  const { data, error } = await db.from("erp_nfse").select("id_externo, pdf_path").eq("conta_receber_id", tituloId).maybeSingle();
+  const { data, error } = await db.from("erp_nfse").select("id_externo, pdf_path, status").eq("conta_receber_id", tituloId).maybeSingle();
   if (error) throw new DomainError("Não foi possível ler a NFS-e.");
   if (!data) throw new DomainError("Este título não tem NFS-e.");
+  if (String(data.status ?? "") !== "informada") throw new DomainError("Não há NFS-e informada para buscar o PDF.");
   const chaveAcesso = typeof data.id_externo === "string" ? data.id_externo : "";
   const conexao = conexaoNfse();
   await guardarPdf(db, tituloId, chaveAcesso, conexao.certificado, conexao.chave, conexao.producao);
@@ -790,6 +844,54 @@ function postarSefin(base: string, certificado: string, chave: string, dpsXmlGZi
     headers: { "content-type": "application/json", accept: "application/json" },
     limite: 8_000_000,
   });
+}
+
+function postarEvento(base: string, chaveNfse: string, certificado: string, chave: string, pedidoRegistroEventoXmlGZipB64: string): Promise<{ status: number; texto: string }> {
+  return httpsTexto({
+    url: `${base}/nfse/${chaveNfse}/eventos`,
+    method: "POST",
+    certificado,
+    chave,
+    body: JSON.stringify({ pedidoRegistroEventoXmlGZipB64 }),
+    headers: { "content-type": "application/json", accept: "application/json" },
+    limite: 8_000_000,
+  });
+}
+
+/** Cancela a NFS-e autorizada no Emissor Nacional. O boleto não entra nesta rotina. */
+export async function cancelarNfseDoTitulo(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {
+  const tituloId = texto(dados, "tituloId").trim();
+  if (!/^[0-9a-f-]{36}$/i.test(tituloId)) throw new DomainError("Título inválido.");
+  const { data, error } = await db.from("erp_nfse").select("id, status, id_externo").eq("conta_receber_id", tituloId).maybeSingle();
+  if (error) throw new DomainError("Não foi possível ler a NFS-e.");
+  if (!data) throw new DomainError("Este título não tem NFS-e.");
+  const ambiente = ambienteNfse(process.env.NFSE_AMBIENTE ?? "");
+  const pedido = validarCancelamentoNfse({
+    ...validarPedidoCancelamento({
+      status: String(data.status ?? ""),
+      chave: typeof data.id_externo === "string" ? data.id_externo : "",
+      motivo: texto(dados, "motivo"),
+      justificativa: texto(dados, "justificativa"),
+    }),
+    cnpjAutor: (process.env.NFSE_CNPJ ?? "").trim(),
+    ambiente: ambiente.ambiente,
+    emitidoEm: instanteBrasil(new Date()),
+  });
+  const conexao = conexaoNfse();
+  const xml = assinarEvento(montarEventoCancelamento(pedido), conexao.chave, conexao.certificado);
+  const enviado = gzipSync(Buffer.from(xml, "utf8")).toString("base64");
+  const resposta = await postarEvento(ambiente.base, pedido.chave, conexao.certificado, conexao.chave, enviado);
+  const nfseId = String(data.id);
+  await aplicarCancelamento(async () => {
+    const { data: gravado, error: gravacao } = await db
+      .from("erp_nfse")
+      .update({ status: "cancelada" })
+      .eq("id", nfseId)
+      .eq("status", "informada")
+      .select("id");
+    if (gravacao || !gravado?.length) throw new DomainError("O Emissor Nacional cancelou a NFS-e, mas o status não foi gravado.");
+  }, resposta.status, resposta.texto);
+  return { id: nfseId };
 }
 
 type RespostaHttp = { status: number; corpo: Buffer; cookies: string[]; location: string; jar: string[]; url: string };
