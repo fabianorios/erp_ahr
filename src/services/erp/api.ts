@@ -941,6 +941,7 @@ export async function emitirNfNacional(input: {
   centroId: string;
   forma: string;
   banco: string;
+  parcelas?: { valor: string; vencimento: string }[];
 }): Promise<string> {
   const corpo = await escrever("nfse.emitir", input);
   if (!corpo.id) throw new DomainError("A nota foi autorizada, mas o título não voltou.");

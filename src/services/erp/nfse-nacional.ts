@@ -1,6 +1,6 @@
 /** Emissão da NFS-e no Emissor Nacional. Não abre conexão. */
 
-import { DomainError, MUNICIPIO_NFSE, assertData, centsToReais, competenciaDoVencimento, reaisToCents, somenteDigitos, type Cents } from "./domain.ts";
+import { DomainError, MUNICIPIO_NFSE, assertData, centsToReais, competenciaDoVencimento, formatBrl, reaisToCents, somenteDigitos, type Cents } from "./domain.ts";
 
 export const CODIGO_MUNICIPIO_PRESTADOR = "3548807";
 export const ORIGEM_TITULO_NFSE = "Emissor Nacional";
@@ -37,6 +37,17 @@ export type PedidoNfse = {
   emitidoEm: string;
   competencia: string;
   ambiente: 1 | 2;
+  /** Texto do serviço, sem a lista de parcelas. A validação preenche. */
+  descricaoServico?: string;
+  /** Quando ausente ou com um item, a nota segue com um título no valor cheio. */
+  parcelas?: { valor: string; vencimento: string }[];
+};
+
+export type ParcelaNota = { valorCents: Cents; vencimento: string };
+
+export type PedidoNfseValidado = PedidoNfse & {
+  descricaoServico: string;
+  parcelasNota: ParcelaNota[];
 };
 
 export type NotaAutorizada = {
@@ -59,6 +70,8 @@ export type TituloNascido = {
   origem: typeof ORIGEM_TITULO_NFSE;
   forma: "boleto" | "pix" | "transferencia" | "outro";
   banco: string | null;
+  parcela: number;
+  quantidadeParcelas: number;
   nfse: {
     numero: string;
     valorCents: Cents;
@@ -149,17 +162,54 @@ function xml(valor: string): string {
   return valor.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
+/** Uma parcela repete o valor da nota. Várias parcelas somam esse valor, cada uma com vencimento. */
+export function dividirNota(input: {
+  valor: string;
+  vencimento: string;
+  parcelas?: { valor: string; vencimento: string }[];
+}): { valorCents: Cents; parcelas: ParcelaNota[] } {
+  const valorCents = reaisToCents(input.valor);
+  if (valorCents <= 0) throw new DomainError("O valor do título precisa ser maior que zero.");
+  const informadas = input.parcelas ?? [];
+  if (informadas.length === 0) {
+    return { valorCents, parcelas: [{ valorCents, vencimento: assertData(input.vencimento, "Vencimento") }] };
+  }
+  if (informadas.length > 60) throw new DomainError("A quantidade de parcelas vai de 1 a 60.");
+  const parcelas = informadas.map((parcela, indice) => {
+    const valorParcela = reaisToCents(parcela.valor);
+    if (valorParcela <= 0) throw new DomainError(`O valor da parcela ${indice + 1} precisa ser maior que zero.`);
+    return {
+      valorCents: valorParcela,
+      vencimento: assertData(parcela.vencimento, `Vencimento da parcela ${indice + 1}`),
+    };
+  });
+  const soma = parcelas.reduce((total, parcela) => total + parcela.valorCents, 0);
+  if (soma !== valorCents) throw new DomainError("A soma das parcelas precisa ser o valor da nota.");
+  return { valorCents, parcelas };
+}
+
+/** A descrição da nota é o serviço. Com duas ou mais parcelas, a divisão fica no mesmo texto. */
+export function descricaoNotaParcelada(servico: string, parcelas: ParcelaNota[]): string {
+  const texto = servico.trim();
+  if (parcelas.length <= 1) return texto;
+  const linhas = parcelas.map((parcela, indice) => {
+    const [ano, mes, dia] = parcela.vencimento.split("-");
+    return `${indice + 1}) ${formatBrl(parcela.valorCents)} com vencimento em ${dia}/${mes}/${ano}`;
+  });
+  return `${texto} Valor dividido em ${parcelas.length} parcelas: ${linhas.join("; ")}.`;
+}
+
+export function validarPedidoNfse(input: PedidoNfse): PedidoNfseValidado {
   const clienteId = input.clienteId.trim();
   if (!/^[0-9a-f-]{36}$/i.test(clienteId)) throw new DomainError("Informe o cliente.");
   const centroId = input.centroId.trim();
   if (!/^[0-9a-f-]{36}$/i.test(centroId)) throw new DomainError("Informe o centro de custo.");
-  const descricao = input.descricao.trim();
-  if (!descricao) throw new DomainError("Informe a descrição do título.");
+  const descricaoServico = (input.descricaoServico ?? input.descricao).trim();
+  if (!descricaoServico) throw new DomainError("Informe a descrição do título.");
+  const divisao = dividirNota({ valor: input.valor, vencimento: input.vencimento, parcelas: input.parcelas });
+  const descricao = descricaoNotaParcelada(descricaoServico, divisao.parcelas);
   if (descricao.length > 2000) throw new DomainError("A descrição passou de 2000 caracteres.");
-  const valor = reaisToCents(input.valor);
-  if (valor <= 0) throw new DomainError("O valor do título precisa ser maior que zero.");
-  const vencimento = assertData(input.vencimento, "Vencimento");
+  const vencimento = divisao.parcelas[0].vencimento;
   const documento = somenteDigitos(input.documento);
   if (documento.length !== 11 && documento.length !== 14) throw new DomainError("O documento do cliente não é CPF nem CNPJ.");
   const nome = input.nome.trim();
@@ -196,7 +246,7 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
     clienteId,
     centroId,
     descricao,
-    valor: centsToReais(valor),
+    valor: centsToReais(divisao.valorCents),
     vencimento,
     competencia,
     documento,
@@ -211,6 +261,8 @@ export function validarPedidoNfse(input: PedidoNfse): PedidoNfse {
     forma,
     banco,
     inscricaoMunicipal: "",
+    descricaoServico,
+    parcelasNota: divisao.parcelas,
   };
 }
 
@@ -394,30 +446,41 @@ export function lerCancelamentoAceito(status: number, corpo: string): void {
   throw new DomainError(detalhe ? `O Emissor Nacional recusou o cancelamento. ${detalhe}` : "O Emissor Nacional recusou o cancelamento.");
 }
 
-/** A nota autorizada é a origem do título. Sem nota, esta função não é chamada. */
-export function tituloDaNota(pedido: PedidoNfse, nota: NotaAutorizada): TituloNascido {
+/** Uma nota autorizada abre um título por parcela. Sem nota, esta função não é chamada. */
+export function titulosDaNota(pedido: PedidoNfse, nota: NotaAutorizada): TituloNascido[] {
   const pronto = validarPedidoNfse(pedido);
+  const parcelas = pronto.parcelasNota;
+  if (parcelas.length > 1 && nota.valorCents !== reaisToCents(pronto.valor)) {
+    throw new DomainError("O Emissor Nacional devolveu um valor diferente do serviço.");
+  }
+  const total = parcelas.length;
   const forma = pronto.forma as TituloNascido["forma"];
-  return {
+  return parcelas.map((parcela, indice) => ({
     clienteId: pronto.clienteId,
     centroId: pronto.centroId,
-    descricao: nota.descricao,
-    valorCents: nota.valorCents,
-    vencimento: pronto.vencimento,
-    competencia: competenciaDoVencimento(pronto.vencimento),
+    descricao: total === 1 ? nota.descricao : `${pronto.descricaoServico} · Parcela ${indice + 1}/${total}`,
+    valorCents: total === 1 ? nota.valorCents : parcela.valorCents,
+    vencimento: parcela.vencimento,
+    competencia: competenciaDoVencimento(parcela.vencimento),
     numeroNf: nota.numero,
     origem: ORIGEM_TITULO_NFSE,
     forma,
     banco: pronto.banco || null,
+    parcela: indice + 1,
+    quantidadeParcelas: total,
     nfse: {
       numero: nota.numero,
       valorCents: nota.valorCents,
-      vencimento: pronto.vencimento,
+      vencimento: parcela.vencimento,
       dataEmissao: nota.dataEmissao,
       chave: nota.chave,
       codigo: nota.codigo,
       emissor: "nacional",
       municipio: MUNICIPIO_NFSE,
     },
-  };
+  }));
+}
+
+export function tituloDaNota(pedido: PedidoNfse, nota: NotaAutorizada): TituloNascido {
+  return titulosDaNota(pedido, nota)[0];
 }

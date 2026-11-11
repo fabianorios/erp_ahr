@@ -16,7 +16,7 @@ import {
   montarDps,
   montarEventoCancelamento,
   numeroDps,
-  tituloDaNota,
+  titulosDaNota,
   validarCancelamentoNfse,
   validarPedidoCancelamento,
   validarPedidoNfse,
@@ -134,11 +134,15 @@ export async function aplicarNota(
   corpo: string,
 ): Promise<string> {
   const nota = lerNotaAutorizada(status, incorporarXml(corpo), pedido.descricao, pedido.valor);
-  const titulo = tituloDaNota(pedido, nota);
-  const id = await gravar.inserir(linhaTitulo(titulo));
-  await gravar.faturar(id);
-  await gravar.inserirNfse(linhaNfse(id, titulo));
-  return id;
+  const titulos = titulosDaNota(pedido, nota);
+  let primeiro = "";
+  for (const titulo of titulos) {
+    const id = await gravar.inserir(linhaTitulo(titulo));
+    if (!primeiro) primeiro = id;
+    await gravar.faturar(id);
+    await gravar.inserirNfse(linhaNfse(id, titulo));
+  }
+  return primeiro;
 }
 
 function linhaTitulo(titulo: TituloNascido): Record<string, unknown> {
@@ -150,8 +154,8 @@ function linhaTitulo(titulo: TituloNascido): Record<string, unknown> {
     vencimento: titulo.vencimento,
     competencia: titulo.competencia,
     origem: titulo.origem,
-    parcela: 1,
-    quantidade_parcelas: 1,
+    parcela: titulo.parcela,
+    quantidade_parcelas: titulo.quantidadeParcelas,
     forma_recebimento: titulo.forma,
     numero_nf: titulo.numeroNf,
     tipo_vencimento: "data_fixa",
@@ -178,6 +182,16 @@ function linhaNfse(tituloId: string, titulo: TituloNascido): Record<string, unkn
 function texto(dados: Record<string, unknown>, chave: string): string {
   const valor = dados[chave];
   return valor == null ? "" : String(valor);
+}
+
+function parcelasDoPedido(dados: Record<string, unknown>): { valor: string; vencimento: string }[] | undefined {
+  const bruto = dados.parcelas;
+  if (!Array.isArray(bruto) || bruto.length === 0) return undefined;
+  return bruto.map((item) => {
+    if (!item || typeof item !== "object") return { valor: "", vencimento: "" };
+    const registro = item as Record<string, unknown>;
+    return { valor: texto(registro, "valor"), vencimento: texto(registro, "vencimento") };
+  });
 }
 
 type CertificadoA1 = { chave: string; certificado: string };
@@ -471,6 +485,7 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
     descricao: texto(dados, "descricao"),
     valor: texto(dados, "valor"),
     vencimento,
+    parcelas: parcelasDoPedido(dados),
     competencia: emitidoEm.slice(0, 10),
     centroId,
     forma: texto(dados, "forma"),
@@ -509,7 +524,8 @@ export async function emitirNfseECriarTitulo(db: Banco, dados: Record<string, un
   } catch (erro) {
     if (erro instanceof DomainError && /autorizada/.test(erro.message)) throw erro;
     const detalhe = erro instanceof DomainError ? erro.message : "O PDF não foi gravado.";
-    throw new DomainError(`A nota foi autorizada e o título foi aberto. ${detalhe}`);
+    const aberto = pedido.parcelasNota.length > 1 ? "os títulos foram abertos" : "o título foi aberto";
+    throw new DomainError(`A nota foi autorizada e ${aberto}. ${detalhe}`);
   }
   return { id };
 }
@@ -542,8 +558,13 @@ function gravador(db: Banco): GravadorNfse {
     },
     async gravarPdf(id, pdf) {
       await gravarPdfEm(diretorioNfse(), id, pdf);
-      const { error } = await db.from("erp_nfse").update({ pdf_path: `${id.toLowerCase()}.pdf` }).eq("conta_receber_id", id);
-      if (error && !/pdf_path/i.test(error.message ?? "")) throw new DomainError("A nota foi autorizada, mas o PDF não foi gravado.");
+      const nome = `${id.toLowerCase()}.pdf`;
+      const lido = await db.from("erp_nfse").select("id_externo").eq("conta_receber_id", id).maybeSingle();
+      const chave = typeof lido.data?.id_externo === "string" ? lido.data.id_externo.trim() : "";
+      const atualizado = chave
+        ? await db.from("erp_nfse").update({ pdf_path: nome }).eq("id_externo", chave)
+        : await db.from("erp_nfse").update({ pdf_path: nome }).eq("conta_receber_id", id);
+      if (atualizado.error && !/pdf_path/i.test(atualizado.error.message ?? "")) throw new DomainError("A nota foi autorizada, mas o PDF não foi gravado.");
     },
   };
 }
@@ -882,13 +903,10 @@ export async function cancelarNfseDoTitulo(db: Banco, dados: Record<string, unkn
   const enviado = gzipSync(Buffer.from(xml, "utf8")).toString("base64");
   const resposta = await postarEvento(ambiente.base, pedido.chave, conexao.certificado, conexao.chave, enviado);
   const nfseId = String(data.id);
+  const chaveNota = typeof data.id_externo === "string" ? data.id_externo.trim() : "";
   await aplicarCancelamento(async () => {
-    const { data: gravado, error: gravacao } = await db
-      .from("erp_nfse")
-      .update({ status: "cancelada" })
-      .eq("id", nfseId)
-      .eq("status", "informada")
-      .select("id");
+    const filtro = db.from("erp_nfse").update({ status: "cancelada" }).eq("status", "informada");
+    const { data: gravado, error: gravacao } = await (chaveNota ? filtro.eq("id_externo", chaveNota) : filtro.eq("id", nfseId)).select("id");
     if (gravacao || !gravado?.length) throw new DomainError("O Emissor Nacional cancelou a NFS-e, mas o status não foi gravado.");
   }, resposta.status, resposta.texto);
   const boleto = await cancelarBoletoAbertoDoTitulo(db, tituloId);

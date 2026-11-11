@@ -10,6 +10,8 @@ import { DomainError } from "../../src/services/erp/domain.ts";
 import forge from "node-forge";
 import {
   ambienteNfse,
+  descricaoNotaParcelada,
+  dividirNota,
   idDps,
   idPedidoCancelamento,
   codigoTributacaoNacional,
@@ -19,6 +21,7 @@ import {
   montarDps,
   montarEventoCancelamento,
   tituloDaNota,
+  titulosDaNota,
   validarBaseSefin,
   type PedidoCancelamentoNfse,
   type PedidoNfse,
@@ -336,5 +339,92 @@ describe("evento de cancelamento da NFS-e", () => {
       gravou = true;
     }, 201, JSON.stringify({ eventoXmlGZipB64: gzipSync(Buffer.from(evento)).toString("base64") }));
     assert.equal(gravou, true);
+  });
+});
+
+describe("parcelas da NFS-e", () => {
+  const parcelas = [
+    { valor: "100,00", vencimento: "2026-11-20" },
+    { valor: "69,00", vencimento: "2026-12-20" },
+  ];
+
+  it("uma parcela mantém o valor cheio e a descrição do serviço", () => {
+    const uma = dividirNota({ valor: "169,00", vencimento: "2026-11-20" });
+    assert.equal(uma.valorCents, 16900);
+    assert.deepEqual(uma.parcelas, [{ valorCents: 16900, vencimento: "2026-11-20" }]);
+    assert.equal(descricaoNotaParcelada("Consultoria mensal", uma.parcelas), "Consultoria mensal");
+    const explicita = dividirNota({ valor: "169,00", vencimento: "2026-11-01", parcelas: [{ valor: "169,00", vencimento: "2026-11-20" }] });
+    assert.equal(explicita.parcelas[0].valorCents, 16900);
+    assert.equal(descricaoNotaParcelada("Consultoria mensal", explicita.parcelas), "Consultoria mensal");
+    assert.throws(() => dividirNota({ valor: "169,00", vencimento: "2026-11-20", parcelas: [{ valor: "100,00", vencimento: "2026-11-20" }] }), /soma das parcelas/);
+  });
+
+  it("soma as parcelas no valor da nota e descreve valor e vencimento de cada uma", () => {
+    const divisao = dividirNota({ valor: "169,00", vencimento: "2026-11-20", parcelas });
+    assert.equal(divisao.valorCents, 16900);
+    assert.equal(divisao.parcelas.reduce((total, parcela) => total + parcela.valorCents, 0), divisao.valorCents);
+    const centavos = dividirNota({
+      valor: "169,00",
+      vencimento: "2026-11-20",
+      parcelas: [
+        { valor: "56,33", vencimento: "2026-11-20" },
+        { valor: "56,33", vencimento: "2026-12-20" },
+        { valor: "56,34", vencimento: "2027-01-20" },
+      ],
+    });
+    assert.equal(centavos.parcelas.reduce((total, parcela) => total + parcela.valorCents, 0), 16900);
+    const texto = descricaoNotaParcelada("Consultoria mensal", divisao.parcelas);
+    assert.match(texto, /^Consultoria mensal Valor dividido em 2 parcelas: /);
+    assert.match(texto, /1\) R\$ 100,00 com vencimento em 20\/11\/2026/);
+    assert.match(texto, /2\) R\$ 69,00 com vencimento em 20\/12\/2026/);
+    const xml = montarDps(pedido({ valor: "169,00", parcelas }));
+    assert.equal(xml.split("Valor dividido").length - 1, 1);
+    assert.match(xml, /<vServ>169\.00<\/vServ>/);
+    assert.match(xml, /20\/11\/2026/);
+    assert.match(xml, /20\/12\/2026/);
+    assert.throws(
+      () => dividirNota({ valor: "169,00", vencimento: "2026-11-20", parcelas: [{ valor: "100,00", vencimento: "2026-11-20" }, { valor: "100,00", vencimento: "2026-12-20" }] }),
+      /soma das parcelas/,
+    );
+    assert.throws(() => dividirNota({ valor: "10,00", vencimento: "2026-11-20", parcelas: [{ valor: "0,00", vencimento: "2026-11-20" }, { valor: "10,00", vencimento: "2026-12-20" }] }), /parcela 1/);
+  });
+
+  it("nota autorizada abre um título por parcela, com a mesma chave e o valor cheio na NFS-e", async () => {
+    const chamadas: string[] = [];
+    const gravar = {
+      async inserir(row: Record<string, unknown>) {
+        chamadas.push(`inserir:${row.parcela}/${row.quantidade_parcelas}:${row.descricao}:${row.valor}:${row.vencimento}`);
+        return `33333333-3333-4333-8333-33333333333${row.parcela}`;
+      },
+      async faturar() {
+        chamadas.push("faturar");
+      },
+      async inserirNfse(row: Record<string, unknown>) {
+        chamadas.push(`nfse:${row.valor}:${row.vencimento}:${row.id_externo}:${row.numero}`);
+      },
+    };
+    const corpo = JSON.stringify({ chaveAcesso: CHAVE, nfseXmlGZipB64: gzipSync(Buffer.from(xmlNota())).toString("base64") });
+    await assert.rejects(
+      () => aplicarNota(gravar, pedido({ parcelas: [{ valor: "100,00", vencimento: "2026-11-20" }, { valor: "50,00", vencimento: "2026-12-20" }] }), 201, corpo),
+      /soma das parcelas/,
+    );
+    assert.deepEqual(chamadas, []);
+
+    const id = await aplicarNota(gravar, pedido({ valor: "169,00", parcelas }), 201, corpo);
+    assert.equal(id, "33333333-3333-4333-8333-333333333331");
+    assert.deepEqual(chamadas, [
+      "inserir:1/2:Consultoria mensal · Parcela 1/2:100.00:2026-11-20",
+      "faturar",
+      `nfse:169.00:2026-11-20:${CHAVE}:321`,
+      "inserir:2/2:Consultoria mensal · Parcela 2/2:69.00:2026-12-20",
+      "faturar",
+      `nfse:169.00:2026-12-20:${CHAVE}:321`,
+    ]);
+    const nota = lerNotaAutorizada(201, incorporarXml(corpo), "Consultoria mensal", "169.00");
+    const titulos = titulosDaNota(pedido({ valor: "169,00", parcelas }), nota);
+    assert.equal(titulos.reduce((total, titulo) => total + titulo.valorCents, 0), nota.valorCents);
+    assert.ok(titulos.every((titulo) => titulo.nfse.chave === CHAVE && titulo.nfse.valorCents === nota.valorCents && titulo.numeroNf === "321"));
+    assert.equal(tituloDaNota(pedido(), nota).valorCents, 16900);
+    assert.equal(tituloDaNota(pedido(), nota).quantidadeParcelas, 1);
   });
 });

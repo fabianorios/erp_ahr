@@ -12,7 +12,8 @@ import { BoletoTitulo } from "@/components/erp/boleto-titulo";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
 import { abrirPdfBoleto, abrirPdfNfse, atualizarTitulo, buscarPdfNfse, cancelarNfseNacional, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
-import { DomainError, reaisToCents } from "@/services/erp/domain";
+import { DomainError, formatBrl, reaisToCents } from "@/services/erp/domain";
+import { dividirNota } from "@/services/erp/nfse-nacional";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
 const vazio = {
@@ -25,6 +26,7 @@ const vazio = {
   prazoDias: "",
   quantidade: "1",
   vencimentos: [""],
+  valores: [""],
   primeiroVencimento: "",
   competencia: "",
   banco: "",
@@ -55,7 +57,8 @@ export function ContasPage() {
   function definirQuantidade(valor: string) {
     const total = Math.max(1, Number(valor) || 1);
     const vencimentos = Array.from({ length: total }, (_, indice) => form.vencimentos[indice] ?? "");
-    setForm({ ...form, quantidade: valor, vencimentos });
+    const valores = Array.from({ length: total }, (_, indice) => form.valores[indice] ?? "");
+    setForm({ ...form, quantidade: valor, vencimentos, valores });
   }
 
   function limpar() {
@@ -76,6 +79,7 @@ export function ContasPage() {
       prazoDias: titulo.prazoDias ? String(titulo.prazoDias) : "",
       quantidade: String(titulo.quantidadeParcelas ?? 1),
       vencimentos: [titulo.vencimento],
+      valores: [reaisInput(titulo.valor)],
       primeiroVencimento: titulo.vencimento,
       competencia: titulo.competencia.slice(0, 7),
       banco: titulo.banco ?? "",
@@ -120,7 +124,7 @@ export function ContasPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <TituloPagina
           titulo="Manutenção de contas a receber"
-          descricao="Gerar NF emite a nota no Emissor Nacional. A nota autorizada cria o título, com cliente, valor, número e descrição. No título já criado ficam o boleto, o kit, o vencimento, o cancelamento e a baixa."
+          descricao="Gerar NF emite a nota no valor cheio do serviço. Informe a quantidade, o valor e o vencimento de cada parcela; a soma fecha o valor da nota. Uma parcela abre um título. Várias parcelas, se o portal autorizar, abrem um título cada, todos com o mesmo número e o mesmo PDF. No título já criado ficam o boleto, o kit, o vencimento, o cancelamento e a baixa."
         />
         <AtalhoConsulta />
       </div>
@@ -165,7 +169,7 @@ export function ContasPage() {
             <Campo label="Número da NF">
               <Input value={form.numeroNf} onChange={(event) => setForm({ ...form, numeroNf: event.target.value })} placeholder="Opcional. A nota sai no GissOnline." />
             </Campo>
-            <Campo label="Valor da parcela">
+            <Campo label={!editando && quantidade > 1 ? "Valor do serviço" : "Valor da parcela"}>
               <CampoDinheiro value={form.valor} onChange={(valor) => setForm({ ...form, valor })} disabled={!podeMudar} />
             </Campo>
             <Campo label="Forma de recebimento">
@@ -195,19 +199,48 @@ export function ContasPage() {
                 <Input inputMode="numeric" value={form.quantidade} onChange={(event) => definirQuantidade(event.target.value)} />
               )}
             </Campo>
-            {!editando && form.tipoVencimento === "data_fixa" && Array.from({ length: quantidade }, (_, indice) => (
-              <Campo key={indice} label={quantidade === 1 ? "Vencimento" : `Vencimento da parcela ${indice + 1}`}>
+            {!editando && quantidade > 1 && (
+              <div className="grid gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Cada parcela da NFS-e tem valor e vencimento. A soma fecha o valor do serviço. Gerar NF usa estas linhas. Criar título previsto repete o valor do serviço em cada parcela.
+                </p>
+                {Array.from({ length: quantidade }, (_, indice) => (
+                  <div key={indice} className="grid gap-3 md:grid-cols-2">
+                    <Campo label={`Valor da parcela ${indice + 1}`}>
+                      <CampoDinheiro
+                        value={form.valores[indice] ?? ""}
+                        onChange={(valorParcela) => {
+                          const valores = [...form.valores];
+                          valores[indice] = valorParcela;
+                          setForm({ ...form, valores });
+                        }}
+                      />
+                    </Campo>
+                    <Campo label={`Vencimento da parcela ${indice + 1}`}>
+                      <Input
+                        type="date"
+                        value={form.vencimentos[indice] ?? ""}
+                        onChange={(event) => {
+                          const vencimentos = [...form.vencimentos];
+                          vencimentos[indice] = event.target.value;
+                          setForm({ ...form, vencimentos });
+                        }}
+                      />
+                    </Campo>
+                  </div>
+                ))}
+                <p className="text-sm text-muted-foreground">{textoSoma(form.valor, form.valores.slice(0, quantidade))}</p>
+              </div>
+            )}
+            {!editando && quantidade === 1 && form.tipoVencimento === "data_fixa" && (
+              <Campo label="Vencimento">
                 <Input
                   type="date"
-                  value={form.vencimentos[indice] ?? ""}
-                  onChange={(event) => {
-                    const vencimentos = [...form.vencimentos];
-                    vencimentos[indice] = event.target.value;
-                    setForm({ ...form, vencimentos });
-                  }}
+                  value={form.vencimentos[0] ?? ""}
+                  onChange={(event) => setForm({ ...form, vencimentos: [event.target.value] })}
                 />
               </Campo>
-            ))}
+            )}
             {!editando && form.tipoVencimento === "prazo_dias" && (
               <div className="grid gap-3 md:grid-cols-2">
                 <Campo label="Prazo em dias">
@@ -258,18 +291,30 @@ export function ContasPage() {
                   variant="outline"
                   onClick={() =>
                     executar(async () => {
+                      const parcelas = quantidade > 1
+                        ? Array.from({ length: quantidade }, (_, indice) => ({
+                            valor: form.valores[indice] ?? "",
+                            vencimento: form.vencimentos[indice] ?? "",
+                          }))
+                        : undefined;
+                      if (parcelas) dividirNota({ valor: form.valor, vencimento: parcelas[0]?.vencimento ?? "", parcelas });
                       const criado = await emitirNfNacional({
                         clienteId: form.clienteId,
                         descricao: form.descricao,
                         valor: form.valor,
-                        vencimento: form.tipoVencimento === "prazo_dias" ? form.primeiroVencimento : (form.vencimentos[0] ?? ""),
+                        vencimento: quantidade > 1
+                          ? (form.vencimentos[0] ?? "")
+                          : form.tipoVencimento === "prazo_dias"
+                            ? form.primeiroVencimento
+                            : (form.vencimentos[0] ?? ""),
                         centroId: form.centroId,
                         forma: form.forma,
                         banco: form.banco,
+                        parcelas,
                       });
                       await recarregar();
                       navigate(`/contas/${criado}`);
-                    }, "NFS-e autorizada. O título nasceu da nota.")
+                    }, quantidade > 1 ? "NFS-e autorizada. Cada parcela virou um título com a mesma nota." : "NFS-e autorizada. O título nasceu da nota.")
                   }
                 >
                   Gerar NF
@@ -327,7 +372,7 @@ export function ContasPage() {
       )}
       {canEdit && !editando && (
         <p className="text-sm text-muted-foreground">
-          Preencha cliente, descrição, valor, vencimento e centro. Gerar NF emite a nota no Emissor Nacional e, se ela for autorizada, abre o título. Rejeição não cria título.
+          Preencha cliente, descrição, valor, vencimento e centro. Com uma parcela, Gerar NF emite a nota nesse valor e abre um título. Com várias, informe o valor e o vencimento de cada uma; a soma fecha o valor do serviço e a nota sai nesse total. Rejeição não cria título.
         </p>
       )}
       {editando?.nfse && (
@@ -446,4 +491,21 @@ function centavosDoForm(valor: string): number | null {
   } catch {
     return null;
   }
+}
+
+function textoSoma(valor: string, valores: string[]): string {
+  let soma = 0;
+  for (const item of valores) {
+    if (!item.trim()) return "Informe o valor e o vencimento de cada parcela. A soma precisa fechar o valor do serviço.";
+    try {
+      soma += reaisToCents(item);
+    } catch {
+      return "Informe o valor de cada parcela em reais.";
+    }
+  }
+  const nota = centavosDoForm(valor);
+  const somaTexto = formatBrl(soma);
+  if (nota == null) return `Soma das parcelas: ${somaTexto}.`;
+  if (soma === nota) return `Soma das parcelas: ${somaTexto}. Fecha o valor do serviço.`;
+  return `Soma das parcelas: ${somaTexto}. Ainda não fecha o valor do serviço.`;
 }
