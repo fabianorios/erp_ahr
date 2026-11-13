@@ -52,6 +52,10 @@ import {
   transicionarProposta,
   validarDespesa,
   validarDocumento,
+  validarRecorrenciaPagar,
+  parcelasComPrazo,
+  parcelasSemPrazoAte,
+  manterAoEncerrar,
   valorRateado,
 } from "../../src/services/erp/domain.ts";
 
@@ -175,6 +179,115 @@ describe("despesa e conta a pagar", () => {
     assert.throws(() => pagarDespesa("paga", "2026-03-05"), /conta a pagar/);
     assert.doesNotThrow(() => cancelarDespesa("a_pagar"));
     assert.throws(() => cancelarDespesa("paga"), DomainError);
+  });
+});
+
+describe("recorrência de título a pagar", () => {
+  const base = {
+    modo: "com_prazo",
+    tipo: "operacional" as const,
+    categoria: "Aluguel",
+    descricao: "Sala",
+    favorecidoNome: "Imobiliária",
+    favorecidoDocumento: "",
+    valor: "1.500,00",
+    diaVencimento: "31",
+    primeiroVencimento: "2026-01-31",
+    quantidadeMeses: "3",
+    tipoCentro: "indireto" as const,
+  };
+
+  it("projeta um título por mês, com o mesmo valor e o dia limitado ao mês", () => {
+    const recorrencia = validarRecorrenciaPagar(base);
+    const parcelas = parcelasComPrazo(recorrencia);
+    assert.deepEqual(
+      parcelas.map((parcela) => parcela.vencimento),
+      ["2026-01-31", "2026-02-28", "2026-03-31"],
+    );
+    assert.deepEqual(
+      parcelas.map((parcela) => parcela.competencia),
+      ["2026-01-01", "2026-02-01", "2026-03-01"],
+    );
+    assert.deepEqual(
+      parcelas.map((parcela) => parcela.valor),
+      [150000, 150000, 150000],
+    );
+    assert.deepEqual(
+      parcelas.map((parcela) => parcela.parcela),
+      [1, 2, 3],
+    );
+    const bissexto = parcelasComPrazo(
+      validarRecorrenciaPagar({ ...base, primeiroVencimento: "2024-01-31", quantidadeMeses: "2" }),
+    );
+    assert.deepEqual(
+      bissexto.map((parcela) => parcela.vencimento),
+      ["2024-01-31", "2024-02-29"],
+    );
+    assert.equal(bissexto[1].valor, 150000);
+  });
+
+  it("sem prazo cria só até o mês atual e não projeta o futuro", () => {
+    const recorrencia = validarRecorrenciaPagar({
+      ...base,
+      modo: "sem_prazo",
+      diaVencimento: "10",
+      primeiroVencimento: "2026-11-10",
+      quantidadeMeses: "",
+      valor: "2500,00",
+    });
+    const noMes = parcelasSemPrazoAte(recorrencia, "2026-11-13", []);
+    assert.deepEqual(
+      noMes.map((parcela) => parcela.vencimento),
+      ["2026-11-10"],
+    );
+    assert.equal(noMes[0].valor, 250000);
+    assert.equal(noMes[0].quantidade, null);
+    assert.deepEqual(parcelasSemPrazoAte(recorrencia, "2026-10-31", []), []);
+    const depois = parcelasSemPrazoAte(recorrencia, "2027-01-15", [{ competencia: "2026-11-01" }, { competencia: "2026-12-01" }]);
+    assert.deepEqual(
+      depois.map((parcela) => [parcela.parcela, parcela.vencimento, parcela.valor]),
+      [[3, "2027-01-10", 250000]],
+    );
+    const emAtraso = parcelasSemPrazoAte(recorrencia, "2027-01-15", []);
+    assert.deepEqual(
+      emAtraso.map((parcela) => parcela.vencimento),
+      ["2026-11-10", "2026-12-10", "2027-01-10"],
+    );
+    assert.equal(emAtraso.every((parcela) => parcela.valor === 250000), true);
+    assert.equal(emAtraso.some((parcela) => parcela.vencimento.startsWith("2027-02")), false);
+    assert.deepEqual(parcelasSemPrazoAte(recorrencia, "2027-02-01", [], "encerrada"), []);
+    const longa = validarRecorrenciaPagar({
+      ...base,
+      modo: "sem_prazo",
+      diaVencimento: "1",
+      primeiroVencimento: "2016-02-01",
+      quantidadeMeses: "",
+    });
+    const centoEVinte = parcelasSemPrazoAte(longa, "2026-01-15", []);
+    assert.equal(centoEVinte.length, 120);
+    assert.equal(centoEVinte[0].vencimento, "2016-02-01");
+    assert.equal(centoEVinte[119].vencimento, "2026-01-01");
+    assert.equal(centoEVinte.every((parcela) => parcela.valor === 150000), true);
+    assert.throws(() => parcelasSemPrazoAte(longa, "2026-02-15", []), /120 meses/);
+  });
+
+  it("encerra sem apagar a parcela paga", () => {
+    const parcelas = manterAoEncerrar([
+      { id: "paga", status: "paga" as const },
+      { id: "aberta", status: "a_pagar" as const },
+    ]);
+    assert.equal(parcelas.length, 2);
+    assert.equal(parcelas.find((parcela) => parcela.id === "paga")?.status, "paga");
+    assert.equal(parcelas.find((parcela) => parcela.id === "aberta")?.status, "a_pagar");
+  });
+
+  it("recusa folha, dia trocado e quantidade indevida", () => {
+    assert.throws(() => validarRecorrenciaPagar({ ...base, descricao: "Pró-labore" }), /pessoal/);
+    assert.throws(() => validarRecorrenciaPagar({ ...base, categoria: "Folha de pagamento" }), /pessoal/);
+    assert.throws(() => validarRecorrenciaPagar({ ...base, diaVencimento: "10" }), /dia informado/);
+    assert.throws(() => validarRecorrenciaPagar({ ...base, quantidadeMeses: "121" }), /120 meses/);
+    assert.throws(() => validarRecorrenciaPagar({ ...base, modo: "sem_prazo", quantidadeMeses: "6" }), /não usa quantidade/);
+    assert.throws(() => validarRecorrenciaPagar({ ...base, modo: "sem_prazo", quantidadeMeses: "", diaVencimento: "32", primeiroVencimento: "2026-01-31" }), /1 a 31/);
   });
 });
 

@@ -35,6 +35,10 @@ import {
   validarCentroIndireto,
   validarCusto,
   validarDespesa,
+  validarRecorrenciaPagar,
+  parcelasComPrazo,
+  parcelasSemPrazoAte,
+  manterAoEncerrar,
   aplicarCamposVazios,
   montarTitulosAvulsos,
   validarCentroTitulo,
@@ -44,6 +48,7 @@ import {
   validarRecebimentoTitulo,
   type Cents,
   type CentroTipo,
+  type ContaPagarStatus,
   type ModoParcelas,
   type PropostaStatus,
 } from "../src/services/erp/domain.ts";
@@ -62,6 +67,9 @@ function falhar(error: { message: string; code?: string } | null): void {
   if (error.code === "23505") throw new DomainError("Este registro já existe.");
   if (/schema cache/i.test(texto) && /titulo|visao_geral|execucao|validade|valores_adicionais/.test(texto)) {
     throw new DomainError("Falta atualizar a tabela de propostas. Rode o SQL de valores da proposta.");
+  }
+  if (/erp_recorrencias_pagar|recorrencia_id|erp_criar_parcela_recorrente|erp_encerrar_recorrencia_pagar/i.test(texto)) {
+    throw new DomainError("Falta a recorrência de títulos a pagar no banco. Rode sql/despesas-recorrentes.sql. O arquivo não foi aplicado daqui.");
   }
   throw new DomainError(texto || "Não foi possível gravar.");
 }
@@ -102,7 +110,7 @@ export async function executarGravacao(
   db: Banco,
   acao: string,
   bruto: unknown,
-): Promise<{ id?: string; aviso?: string; erroBoleto?: string; clientes?: ClienteLista[]; contatos?: ContatoLista[]; titulos?: unknown[] }> {
+): Promise<{ id?: string; aviso?: string; erroBoleto?: string; criadas?: number; clientes?: ClienteLista[]; contatos?: ContatoLista[]; titulos?: unknown[] }> {
   const dados = bruto == null ? {} : dadosDe(bruto);
   switch (acao) {
     case "cliente.listar":
@@ -133,6 +141,12 @@ export async function executarGravacao(
       return cancelarConta(db, dados);
     case "despesa.excluir":
       return excluirDespesa(db, dados);
+    case "despesa.recorrente":
+      return lancarRecorrencia(db, dados);
+    case "despesa.recorrencia.gerar":
+      return gerarRecorrenciasAbertas(db);
+    case "despesa.recorrencia.encerrar":
+      return encerrarRecorrencia(db, dados);
     case "colaborador.criar":
       return criarColaborador(db, dados);
     case "colaborador.renomear":
@@ -503,6 +517,168 @@ async function excluirDespesa(db: Banco, dados: Record<string, unknown>): Promis
   falhar(error);
   if (!data?.length) throw new DomainError("Despesa não encontrada.");
   return { id };
+}
+
+function hojeEmSaoPaulo(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+}
+
+function valorDaLinha(valor: unknown): string {
+  const numero = typeof valor === "number" ? valor : Number(String(valor ?? "").replace(",", "."));
+  if (!Number.isFinite(numero)) throw new DomainError("Valor ausente.");
+  return centsToReais(Math.round(numero * 100 + Math.sign(numero) * 1e-6)).replace(".", ",");
+}
+
+function recorrenciaEntrada(dados: Record<string, unknown>) {
+  const tipo = texto(dados, "tipo");
+  if (tipo !== "operacional" && tipo !== "financeira") throw new DomainError("Tipo de despesa inválido.");
+  return validarRecorrenciaPagar({
+    modo: texto(dados, "modo"),
+    tipo,
+    categoria: texto(dados, "categoria"),
+    descricao: texto(dados, "descricao"),
+    favorecidoNome: texto(dados, "favorecidoNome"),
+    favorecidoDocumento: texto(dados, "favorecidoDocumento"),
+    valor: texto(dados, "valor"),
+    diaVencimento: texto(dados, "diaVencimento"),
+    primeiroVencimento: texto(dados, "primeiroVencimento"),
+    quantidadeMeses: texto(dados, "quantidadeMeses"),
+    tipoCentro: texto(dados, "tipoCentro") as CentroTipo,
+  });
+}
+
+async function lancarParcela(
+  db: Banco,
+  recorrenciaId: string,
+  cadastro: {
+    tipo: string;
+    categoria: string;
+    descricao: string;
+    favorecidoNome: string;
+    favorecidoDocumento: string | null;
+    valor: Cents;
+    centroId: string;
+  },
+  parcela: { parcela: number; competencia: string; vencimento: string; valor: Cents },
+): Promise<string | null> {
+  const { data, error } = await db.rpc("erp_criar_parcela_recorrente", {
+    p_recorrencia_id: recorrenciaId,
+    p_parcela: parcela.parcela,
+    p_tipo: cadastro.tipo,
+    p_categoria: cadastro.categoria,
+    p_descricao: cadastro.descricao,
+    p_favorecido_nome: cadastro.favorecidoNome,
+    p_favorecido_documento: cadastro.favorecidoDocumento ?? "",
+    p_valor: dinheiro(parcela.valor),
+    p_competencia: parcela.competencia,
+    p_centro_custo_id: cadastro.centroId,
+    p_vencimento: parcela.vencimento,
+  });
+  if (error?.code === "23505") return null;
+  falhar(error);
+  if (typeof data !== "string") throw new DomainError("Não foi possível lançar a parcela.");
+  return data;
+}
+
+async function desfazerRecorrencia(db: Banco, recorrenciaId: string, despesas: string[]): Promise<void> {
+  if (despesas.length) {
+    const { error } = await db.from("erp_despesas").delete().in("id", despesas);
+    falhar(error);
+  }
+  const { error } = await db.from("erp_recorrencias_pagar").delete().eq("id", recorrenciaId);
+  falhar(error);
+}
+
+async function lancarRecorrencia(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string; criadas?: number }> {
+  const recorrencia = recorrenciaEntrada(dados);
+  const centroId = idDe(dados.centroId, "Centro");
+  const parcelas =
+    recorrencia.modo === "com_prazo" ? parcelasComPrazo(recorrencia) : parcelasSemPrazoAte(recorrencia, hojeEmSaoPaulo(), []);
+  const { data, error } = await db
+    .from("erp_recorrencias_pagar")
+    .insert({
+      modo: recorrencia.modo,
+      tipo: recorrencia.tipo,
+      categoria: recorrencia.categoria,
+      descricao: recorrencia.descricao,
+      favorecido_nome: recorrencia.favorecidoNome,
+      favorecido_documento: recorrencia.favorecidoDocumento,
+      valor: dinheiro(recorrencia.valor),
+      dia_vencimento: recorrencia.diaVencimento,
+      primeiro_vencimento: recorrencia.primeiroVencimento,
+      quantidade_meses: recorrencia.quantidadeMeses,
+      centro_custo_id: centroId,
+      status: "ativa",
+    })
+    .select("id")
+    .single();
+  falhar(error);
+  if (!data?.id) throw new DomainError("Não foi possível lançar a recorrência.");
+  const recorrenciaId = String(data.id);
+  const criadas: string[] = [];
+  try {
+    for (const parcela of parcelas) {
+      const id = await lancarParcela(db, recorrenciaId, { ...recorrencia, centroId }, parcela);
+      if (id) criadas.push(id);
+    }
+  } catch (erro) {
+    await desfazerRecorrencia(db, recorrenciaId, criadas);
+    throw erro;
+  }
+  return { id: recorrenciaId, criadas: criadas.length };
+}
+
+async function gerarRecorrenciasAbertas(db: Banco): Promise<{ criadas?: number }> {
+  const hoje = hojeEmSaoPaulo();
+  const { data, error } = await db.from("erp_recorrencias_pagar").select("*").eq("modo", "sem_prazo").eq("status", "ativa");
+  falhar(error);
+  let criadas = 0;
+  for (const row of data ?? []) {
+    const recorrencia = validarRecorrenciaPagar({
+      modo: "sem_prazo",
+      tipo: row.tipo,
+      categoria: row.categoria,
+      descricao: row.descricao,
+      favorecidoNome: row.favorecido_nome,
+      favorecidoDocumento: row.favorecido_documento ?? "",
+      valor: valorDaLinha(row.valor),
+      diaVencimento: String(row.dia_vencimento),
+      primeiroVencimento: String(row.primeiro_vencimento).slice(0, 10),
+      quantidadeMeses: "",
+      tipoCentro: row.tipo === "financeira" ? "financeiro" : "indireto",
+    });
+    const { data: despesas, error: erroDespesas } = await db.from("erp_despesas").select("competencia").eq("recorrencia_id", row.id);
+    falhar(erroDespesas);
+    const novas = parcelasSemPrazoAte(
+      recorrencia,
+      hoje,
+      (despesas ?? []).map((item: { competencia: string }) => ({ competencia: String(item.competencia).slice(0, 10) })),
+    );
+    for (const parcela of novas) {
+      const id = await lancarParcela(db, String(row.id), { ...recorrencia, centroId: String(row.centro_custo_id) }, parcela);
+      if (id) criadas += 1;
+    }
+  }
+  return { criadas };
+}
+
+async function encerrarRecorrencia(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {
+  const id = idDe(dados.id, "Recorrência");
+  const { data: despesas, error: leitura } = await db.from("erp_despesas").select("id, erp_contas_pagar(status)").eq("recorrencia_id", id);
+  falhar(leitura);
+  const parcelas = (despesas ?? []).map((row: { id: string; erp_contas_pagar: { status?: string } | { status?: string }[] | null }) => {
+    const conta = aninhado(row.erp_contas_pagar);
+    const status: ContaPagarStatus = conta?.status === "paga" ? "paga" : conta?.status === "cancelada" ? "cancelada" : "a_pagar";
+    return { id: String(row.id), status };
+  });
+  const manter = new Set(manterAoEncerrar(parcelas).map((parcela) => parcela.id));
+  if (parcelas.some((parcela) => parcela.status === "paga" && !manter.has(parcela.id))) {
+    throw new DomainError("Encerrar a recorrência não apaga título, mesmo pago.");
+  }
+  const { data, error } = await db.rpc("erp_encerrar_recorrencia_pagar", { p_id: id });
+  falhar(error);
+  if (typeof data !== "string") throw new DomainError("Recorrência não encontrada.");
+  return { id: data };
 }
 
 async function criarColaborador(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {

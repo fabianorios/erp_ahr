@@ -43,6 +43,7 @@ import {
   validarCentroIndireto,
   validarCusto,
   validarDespesa,
+  validarRecorrenciaPagar,
   adicionaisDeJson,
   adicionaisNoFormulario,
   agendaDeJson,
@@ -96,7 +97,7 @@ async function ler<T>(query: PromiseLike<Result>): Promise<T[]> {
   return (data ?? []) as T[];
 }
 
-async function escrever(acao: string, dados: unknown): Promise<{ id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; erroBoleto?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean }> {
+async function escrever(acao: string, dados: unknown): Promise<{ id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; erroBoleto?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; criadas?: number; nfse?: boolean; boleto?: boolean }> {
   if (!supabase) throw new DomainError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente deste ERP.");
   const sessao = await supabase.auth.getSession();
   const token = sessao.data.session?.access_token;
@@ -106,7 +107,7 @@ async function escrever(acao: string, dados: unknown): Promise<{ id?: string; me
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ acao, dados }),
   });
-  const corpo = (await resposta.json().catch(() => ({}))) as { id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; erroBoleto?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; nfse?: boolean; boleto?: boolean };
+  const corpo = (await resposta.json().catch(() => ({}))) as { id?: string; message?: string; clientes?: ClienteItem[]; contatos?: ContatoItem[]; titulos?: any[]; painel?: PainelAssinaturaDados | null; aviso?: string; erroBoleto?: string; vez?: boolean; atualizados?: number; ignorados?: number; semVazio?: number; criadas?: number; nfse?: boolean; boleto?: boolean };
   if (!resposta.ok) throw new DomainError(corpo.message ?? "Não foi possível gravar.");
   return corpo;
 }
@@ -275,37 +276,59 @@ export type DespesaItem = {
   vencimento: string | null;
   dataPagamento: string | null;
   cancelada: boolean;
+  recorrenciaId: string | null;
+  parcela: number | null;
+  recorrenciaModo: "com_prazo" | "sem_prazo" | null;
+  recorrenciaStatus: "ativa" | "encerrada" | null;
+  quantidadeMeses: number | null;
 };
 
+function mapDespesa(row: any): DespesaItem {
+  const centro = um<{ nome: string; tipo: CentroTipo }>(row.erp_centros_custo);
+  const conta = um<{ id: string; status: ContaPagarStatus; vencimento: string; data_pagamento: string | null }>(row.erp_contas_pagar);
+  const serie = um<{ modo: "com_prazo" | "sem_prazo"; status: "ativa" | "encerrada"; quantidade_meses: number | null }>(row.erp_recorrencias_pagar);
+  return {
+    id: row.id,
+    tipo: row.tipo,
+    categoria: row.categoria,
+    descricao: row.descricao,
+    favorecidoNome: row.favorecido_nome,
+    favorecidoDocumento: row.favorecido_documento ?? "",
+    valor: cents(row.valor),
+    competencia: dia(row.competencia),
+    centroId: row.centro_custo_id,
+    centroNome: centro?.nome ?? "Centro",
+    tipoCentro: centro?.tipo ?? "indireto",
+    contaId: conta?.id ?? null,
+    contaStatus: conta?.status ?? "a_pagar",
+    vencimento: conta ? dia(conta.vencimento) : null,
+    dataPagamento: diaOu(conta?.data_pagamento),
+    cancelada: conta?.status === "cancelada",
+    recorrenciaId: typeof row.recorrencia_id === "string" ? row.recorrencia_id : null,
+    parcela: typeof row.parcela === "number" ? row.parcela : null,
+    recorrenciaModo: serie?.modo ?? null,
+    recorrenciaStatus: serie?.status ?? null,
+    quantidadeMeses: serie?.quantidade_meses ?? null,
+  };
+}
+
+async function consultarDespesas(comRecorrencia: boolean): Promise<DespesaItem[]> {
+  const relacoes = comRecorrencia
+    ? "*, erp_centros_custo(nome, tipo), erp_contas_pagar(id, status, vencimento, data_pagamento), erp_recorrencias_pagar(modo, status, quantidade_meses)"
+    : "*, erp_centros_custo(nome, tipo), erp_contas_pagar(id, status, vencimento, data_pagamento)";
+  const data = await ler<any>(banco().from("erp_despesas").select(relacoes).order("competencia", { ascending: false }));
+  return data.map(mapDespesa);
+}
+
 export async function listarDespesas(): Promise<DespesaItem[]> {
-  const data = await ler<any>(
-    banco()
-      .from("erp_despesas")
-      .select("*, erp_centros_custo(nome, tipo), erp_contas_pagar(id, status, vencimento, data_pagamento)")
-      .order("competencia", { ascending: false }),
-  );
-  return data.map((row) => {
-    const centro = um<{ nome: string; tipo: CentroTipo }>(row.erp_centros_custo);
-    const conta = um<{ id: string; status: ContaPagarStatus; vencimento: string; data_pagamento: string | null }>(row.erp_contas_pagar);
-    return {
-      id: row.id,
-      tipo: row.tipo,
-      categoria: row.categoria,
-      descricao: row.descricao,
-      favorecidoNome: row.favorecido_nome,
-      favorecidoDocumento: row.favorecido_documento ?? "",
-      valor: cents(row.valor),
-      competencia: dia(row.competencia),
-      centroId: row.centro_custo_id,
-      centroNome: centro?.nome ?? "Centro",
-      tipoCentro: centro?.tipo ?? "indireto",
-      contaId: conta?.id ?? null,
-      contaStatus: conta?.status ?? "a_pagar",
-      vencimento: conta ? dia(conta.vencimento) : null,
-      dataPagamento: diaOu(conta?.data_pagamento),
-      cancelada: conta?.status === "cancelada",
-    };
-  });
+  try {
+    return await consultarDespesas(true);
+  } catch (error) {
+    if (error instanceof DomainError && /recorrenc|relationship|schema cache/i.test(error.message)) {
+      return consultarDespesas(false);
+    }
+    throw error;
+  }
 }
 
 export async function criarDespesa(input: {
@@ -356,6 +379,44 @@ export async function cancelarConta(contaId: string, status: ContaPagarStatus): 
 export async function excluirDespesa(id: string, status: ContaPagarStatus): Promise<void> {
   if (status === "paga") throw new DomainError("Conta paga não pode ser excluída.");
   await escrever("despesa.excluir", { id });
+}
+
+export async function lancarRecorrencia(input: {
+  modo: "com_prazo" | "sem_prazo";
+  tipo: "operacional" | "financeira";
+  categoria: string;
+  descricao: string;
+  favorecidoNome: string;
+  favorecidoDocumento: string;
+  valor: string;
+  diaVencimento: string;
+  primeiroVencimento: string;
+  quantidadeMeses: string;
+  centroId: string;
+  tipoCentro: CentroTipo;
+}): Promise<string> {
+  validarRecorrenciaPagar(input);
+  const corpo = await escrever("despesa.recorrente", input);
+  const criadas = corpo.criadas ?? 0;
+  if (input.modo === "com_prazo") return `Recorrência lançada. ${criadas} títulos a pagar, um por mês.`;
+  if (criadas === 0) return "Recorrência sem prazo lançada. O título entra no mês do primeiro vencimento.";
+  if (criadas === 1) return "Recorrência sem prazo lançada. O título deste mês já está na lista.";
+  return `Recorrência sem prazo lançada. ${criadas} títulos até o mês atual.`;
+}
+
+export async function gerarRecorrenciasAbertas(): Promise<number> {
+  try {
+    const corpo = await escrever("despesa.recorrencia.gerar", {});
+    return corpo.criadas ?? 0;
+  } catch (error) {
+    if (error instanceof DomainError && /despesas-recorrentes\.sql/.test(error.message)) return 0;
+    throw error;
+  }
+}
+
+export async function encerrarRecorrencia(id: string): Promise<string> {
+  await escrever("despesa.recorrencia.encerrar", { id });
+  return "Recorrência encerrada. Os títulos já lançados permanecem, inclusive os pagos.";
 }
 
 export type Colaborador = { id: string; nome: string; ativo: boolean };

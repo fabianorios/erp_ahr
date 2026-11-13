@@ -295,6 +295,181 @@ export function cancelarDespesa(status: ContaPagarStatus): void {
   if (status !== "a_pagar") throw new DomainError("Só conta a pagar pode ser cancelada.");
 }
 
+export type ModoRecorrenciaPagar = "com_prazo" | "sem_prazo";
+export type StatusRecorrenciaPagar = "ativa" | "encerrada";
+
+const LIMITE_MESES_RECORRENCIA = 120;
+const FOLHA_FORA = /sal[aá]rio|pr[oó][\s-]?labore|prolabore|folha de pagamento/i;
+
+export type RecorrenciaPagar = {
+  modo: ModoRecorrenciaPagar;
+  tipo: "operacional" | "financeira";
+  categoria: string;
+  descricao: string;
+  favorecidoNome: string;
+  favorecidoDocumento: string | null;
+  valor: Cents;
+  diaVencimento: number;
+  primeiroVencimento: string;
+  quantidadeMeses: number | null;
+  tipoCentro: CentroTipo;
+};
+
+export type ParcelaRecorrente = {
+  parcela: number;
+  quantidade: number | null;
+  vencimento: string;
+  competencia: string;
+  valor: Cents;
+};
+
+function diaDoMes(valor: string): number {
+  if (!/^\d{1,2}$/.test(valor.trim())) throw new DomainError("O dia do vencimento vai de 1 a 31.");
+  const dia = Number(valor);
+  if (dia < 1 || dia > 31) throw new DomainError("O dia do vencimento vai de 1 a 31.");
+  return dia;
+}
+
+function quantidadeDeMeses(valor: string): number {
+  if (!/^\d{1,3}$/.test(valor.trim())) throw new DomainError("Informe a quantidade de meses.");
+  const quantidade = Number(valor);
+  if (quantidade < 1 || quantidade > LIMITE_MESES_RECORRENCIA) {
+    throw new DomainError("A recorrência com prazo aceita de 1 a 120 meses.");
+  }
+  return quantidade;
+}
+
+function rejeitarFolha(categoria: string, descricao: string): void {
+  if (FOLHA_FORA.test(categoria) || FOLHA_FORA.test(descricao)) {
+    throw new DomainError("Salário, pró-labore e folha ficam no pessoal, fora dos títulos recorrentes.");
+  }
+}
+
+function ultimoDiaDoMes(ano: number, mes: number): number {
+  return new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+}
+
+function vencimentoNoMes(ano: number, mes: number, dia: number): string {
+  const efetivo = Math.min(dia, ultimoDiaDoMes(ano, mes));
+  return `${ano}-${String(mes).padStart(2, "0")}-${String(efetivo).padStart(2, "0")}`;
+}
+
+function mesSomado(ano: number, mes: number, delta: number): { ano: number; mes: number } {
+  const indice = ano * 12 + (mes - 1) + delta;
+  return { ano: Math.floor(indice / 12), mes: (indice % 12) + 1 };
+}
+
+function conferirPrimeiroVencimento(primeiro: string, dia: number): string {
+  const data = assertData(primeiro, "Primeiro vencimento");
+  const ano = Number(data.slice(0, 4));
+  const mes = Number(data.slice(5, 7));
+  if (data !== vencimentoNoMes(ano, mes, dia)) {
+    throw new DomainError("O primeiro vencimento precisa cair no dia informado.");
+  }
+  return data;
+}
+
+function parcelaDoIndice(base: RecorrenciaPagar, indice: number): ParcelaRecorrente {
+  const anoInicial = Number(base.primeiroVencimento.slice(0, 4));
+  const mesInicial = Number(base.primeiroVencimento.slice(5, 7));
+  const { ano, mes } = mesSomado(anoInicial, mesInicial, indice);
+  const vencimento = vencimentoNoMes(ano, mes, base.diaVencimento);
+  return {
+    parcela: indice + 1,
+    quantidade: base.quantidadeMeses,
+    vencimento,
+    competencia: competenciaDoVencimento(vencimento),
+    valor: base.valor,
+  };
+}
+
+export function validarRecorrenciaPagar(input: {
+  modo: string;
+  tipo: "operacional" | "financeira";
+  categoria: string;
+  descricao: string;
+  favorecidoNome: string;
+  favorecidoDocumento: string;
+  valor: string;
+  diaVencimento: string;
+  primeiroVencimento: string;
+  quantidadeMeses: string;
+  tipoCentro: CentroTipo;
+}): RecorrenciaPagar {
+  if (input.modo !== "com_prazo" && input.modo !== "sem_prazo") throw new DomainError("Escolha recorrência com prazo ou sem prazo.");
+  rejeitarFolha(input.categoria, input.descricao);
+  const diaVencimento = diaDoMes(input.diaVencimento);
+  const primeiroVencimento = conferirPrimeiroVencimento(input.primeiroVencimento, diaVencimento);
+  const quantidadeMeses = input.modo === "com_prazo" ? quantidadeDeMeses(input.quantidadeMeses) : null;
+  if (input.modo === "sem_prazo" && input.quantidadeMeses.trim()) {
+    throw new DomainError("Sem prazo não usa quantidade de meses.");
+  }
+  const despesa = validarDespesa({
+    tipo: input.tipo,
+    categoria: input.categoria,
+    descricao: input.descricao,
+    favorecidoNome: input.favorecidoNome,
+    favorecidoDocumento: input.favorecidoDocumento,
+    valor: input.valor,
+    competencia: primeiroVencimento.slice(0, 7),
+    vencimento: primeiroVencimento,
+    tipoCentro: input.tipoCentro,
+  });
+  return {
+    modo: input.modo,
+    tipo: despesa.tipo,
+    categoria: despesa.categoria,
+    descricao: despesa.descricao,
+    favorecidoNome: despesa.favorecidoNome,
+    favorecidoDocumento: despesa.favorecidoDocumento,
+    valor: despesa.valor,
+    diaVencimento,
+    primeiroVencimento,
+    quantidadeMeses,
+    tipoCentro: input.tipoCentro,
+  };
+}
+
+export function parcelasComPrazo(recorrencia: RecorrenciaPagar): ParcelaRecorrente[] {
+  if (recorrencia.modo !== "com_prazo" || recorrencia.quantidadeMeses == null) {
+    throw new DomainError("Recorrência com prazo precisa da quantidade de meses.");
+  }
+  return Array.from({ length: recorrencia.quantidadeMeses }, (_, indice) => parcelaDoIndice(recorrencia, indice));
+}
+
+export function parcelasSemPrazoAte(
+  recorrencia: RecorrenciaPagar,
+  hoje: string,
+  existentes: { competencia: string }[],
+  status: StatusRecorrenciaPagar = "ativa",
+): ParcelaRecorrente[] {
+  if (recorrencia.modo !== "sem_prazo" || recorrencia.quantidadeMeses != null) {
+    throw new DomainError("Recorrência sem prazo não tem quantidade de meses.");
+  }
+  if (status === "encerrada") return [];
+  const data = assertData(hoje, "Hoje");
+  const limite = data.slice(0, 7);
+  const inicio = recorrencia.primeiroVencimento.slice(0, 7);
+  if (inicio > limite) return [];
+  const ja = new Set(existentes.map((item) => item.competencia.slice(0, 7)));
+  const parcelas: ParcelaRecorrente[] = [];
+  const anoInicial = Number(recorrencia.primeiroVencimento.slice(0, 4));
+  const mesInicial = Number(recorrencia.primeiroVencimento.slice(5, 7));
+  for (let indice = 0; ; indice += 1) {
+    const { ano, mes } = mesSomado(anoInicial, mesInicial, indice);
+    const chave = `${ano}-${String(mes).padStart(2, "0")}`;
+    if (chave > limite) return parcelas;
+    if (indice >= LIMITE_MESES_RECORRENCIA) {
+      throw new DomainError("A recorrência sem prazo só gera até o mês atual, no máximo 120 meses.");
+    }
+    if (!ja.has(chave)) parcelas.push(parcelaDoIndice(recorrencia, indice));
+  }
+}
+
+export function manterAoEncerrar<T extends { id: string; status: ContaPagarStatus }>(parcelas: T[]): T[] {
+  return parcelas.map((parcela) => ({ ...parcela }));
+}
+
 export function validarCusto(input: {
   salario: string;
   encargos: string;
