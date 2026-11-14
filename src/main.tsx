@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import { Toaster } from "sonner";
 import { App } from "./App";
 import "./styles.css";
+import "./shell.css";
 
 const consultas = new QueryClient();
 

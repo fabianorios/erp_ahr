@@ -75,81 +75,67 @@ export function Shell({
   }, [caminho]);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className={`erp-app ${menuAberto ? "menu-aberto" : ""}`}>
       {menuAberto && (
-        <button
-          type="button"
-          aria-label="Fechar menu"
-          className="fixed inset-0 z-30 bg-black/40 md:hidden"
-          onClick={() => setMenuAberto(false)}
-        />
+        <button type="button" aria-label="Fechar menu" className="erp-backdrop" onClick={() => setMenuAberto(false)} />
       )}
-      <div className="md:flex md:min-h-screen">
-        <aside
-          className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-[#003366] text-white transition-transform md:sticky md:top-0 md:h-screen md:translate-x-0 ${menuAberto ? "translate-x-0" : "-translate-x-full"}`}
-        >
-          <div className="border-b border-white/10 px-4 py-4">
-            <Marca />
-          </div>
-          <nav className="flex-1 overflow-y-auto px-2 py-2" aria-label="Menu principal">
-            <p className="mb-2 px-2 text-xs font-semibold text-white/40">MENU PRINCIPAL</p>
-            <ul className="flex flex-col gap-1">
-              {menu.map((entrada) =>
-                entrada.tipo === "link" ? (
-                  <li key={entrada.href}>
-                    <LinkMenu href={entrada.href} rotulo={entrada.rotulo} icone={entrada.icone} caminho={caminho} />
-                  </li>
-                ) : (
-                  <li key={entrada.rotulo}>
-                    <GrupoMenu
-                      entrada={entrada}
-                      caminho={caminho}
-                      aberto={Boolean(grupos[entrada.rotulo])}
-                      onToggle={() => setGrupos((atual) => ({ ...atual, [entrada.rotulo]: !atual[entrada.rotulo] }))}
-                    />
-                  </li>
-                ),
-              )}
-            </ul>
-          </nav>
-          <div className="border-t border-white/10 p-4">
-            <div className="rounded-lg border border-white/10 bg-white/5 px-2 py-2">
-              <div className="truncate text-xs font-medium text-white">{email}</div>
-              {papel && <div className="text-[10px] font-bold uppercase text-white/40">{papel}</div>}
-            </div>
-          </div>
-        </aside>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-[#003366] px-4">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                className="rounded-md p-2 text-white hover:bg-white/10 md:hidden"
-                aria-label="Abrir menu"
-                onClick={() => setMenuAberto(true)}
-              >
-                <Icone nome="painel" />
-              </button>
-              <div className="text-sm font-bold tracking-tight text-white">
-                ERP AHR
-                <span className="ml-2 hidden font-normal text-white/50 sm:inline">| AHR BRASIL</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="hidden flex-col items-end leading-tight md:flex">
-                <span className="max-w-[150px] truncate text-xs font-medium text-white">{email}</span>
-                <span className="text-[10px] font-bold uppercase tracking-tight text-white/50">Conectado</span>
-              </div>
-              <button type="button" className="text-[10px] text-white/70 hover:text-white hover:underline" onClick={onSair}>
-                Sair
-              </button>
-              <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm text-white">
-                {(email.trim().charAt(0) || "A").toUpperCase()}
-              </div>
-            </div>
-          </header>
-          <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+      <aside className={`erp-menu ${menuAberto ? "aberto" : ""}`}>
+        <div className="border-b border-white/10 px-4 py-4">
+          <Marca />
         </div>
+        <nav aria-label="Menu principal">
+          <p className="mb-2 px-2 text-xs font-semibold text-white/40">MENU PRINCIPAL</p>
+          <ul>
+            {menu.map((entrada) =>
+              entrada.tipo === "link" ? (
+                <li key={entrada.href}>
+                  <LinkMenu href={entrada.href} rotulo={entrada.rotulo} icone={entrada.icone} caminho={caminho} />
+                </li>
+              ) : (
+                <li key={entrada.rotulo}>
+                  <GrupoMenu
+                    entrada={entrada}
+                    caminho={caminho}
+                    aberto={Boolean(grupos[entrada.rotulo])}
+                    onToggle={() => setGrupos((atual) => ({ ...atual, [entrada.rotulo]: !atual[entrada.rotulo] }))}
+                  />
+                </li>
+              ),
+            )}
+          </ul>
+        </nav>
+        <div className="border-t border-white/10 p-4">
+          <div className="rounded-lg border border-white/10 bg-white/5 px-2 py-2">
+            <div className="truncate text-xs font-medium">{email}</div>
+            {papel && <div className="text-[10px] font-bold uppercase text-white/40">{papel}</div>}
+          </div>
+        </div>
+      </aside>
+      <div className="erp-conteudo">
+        <header className="erp-topo">
+          <div className="flex items-center gap-3">
+            <button type="button" className="erp-menu-toggle" aria-label="Abrir menu" onClick={() => setMenuAberto(true)}>
+              <Icone nome="painel" />
+            </button>
+            <div className="text-sm font-bold tracking-tight">
+              ERP AHR
+              <span className="ml-2 hidden font-normal text-white/50 sm:inline">| AHR BRASIL</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="hidden flex-col items-end leading-tight md:flex">
+              <span className="max-w-[150px] truncate text-xs font-medium">{email}</span>
+              <span className="text-[10px] font-bold uppercase tracking-tight text-white/50">Conectado</span>
+            </div>
+            <button type="button" className="text-[10px] text-white/70 hover:text-white hover:underline" onClick={onSair}>
+              Sair
+            </button>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm">
+              {(email.trim().charAt(0) || "A").toUpperCase()}
+            </div>
+          </div>
+        </header>
+        <main>{children}</main>
       </div>
     </div>
   );
@@ -186,9 +172,9 @@ export function TelaAcesso({ titulo, children }: { titulo: string; children: Rea
 function LinkMenu({ href, rotulo, icone, caminho }: { href: string; rotulo: string; icone: IconeNome; caminho: string }) {
   const ativo = itemAtivo(href, caminho);
   return (
-    <Link to={href} className={classeItem(ativo)} aria-current={ativo ? "page" : undefined}>
+    <Link to={href} className="erp-item" data-ativo={ativo ? "true" : "false"} aria-current={ativo ? "page" : undefined}>
       <Icone nome={icone} />
-      <span className="truncate">{rotulo}</span>
+      <span className="erp-rotulo">{rotulo}</span>
     </Link>
   );
 }
@@ -206,25 +192,21 @@ function GrupoMenu({
 }) {
   const ativo = entrada.itens.some((item) => itemAtivo(item.href, caminho));
   return (
-    <div>
-      <button type="button" className={classeItem(ativo)} aria-expanded={aberto} onClick={onToggle}>
+    <div className="erp-grupo">
+      <button type="button" className="erp-item" data-ativo={ativo ? "true" : "false"} aria-expanded={aberto} onClick={onToggle}>
         <Icone nome={entrada.icone} />
-        <span className="truncate">{entrada.rotulo}</span>
-        <Icone nome="chevron" className={`ml-auto transition-transform ${aberto ? "rotate-90" : ""}`} />
+        <span className="erp-rotulo">{entrada.rotulo}</span>
+        <Icone nome="chevron" className={`erp-chevron ${aberto ? "aberto" : ""}`} />
       </button>
       {aberto && (
-        <ul className="ml-4 mt-1 flex flex-col gap-1 border-l border-white/10 px-2.5 py-0.5">
+        <ul className="erp-subs">
           {entrada.itens.map((item) => {
             const subAtivo = itemAtivo(item.href, caminho);
             return (
               <li key={item.href}>
-                <Link
-                  to={item.href}
-                  className={`flex h-7 items-center gap-2 rounded-md px-2 text-xs ${subAtivo ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/10 hover:text-white"}`}
-                  aria-current={subAtivo ? "page" : undefined}
-                >
+                <Link to={item.href} className="erp-sub" data-ativo={subAtivo ? "true" : "false"} aria-current={subAtivo ? "page" : undefined}>
                   <span className="h-1 w-1 shrink-0 rounded-full bg-white/20" />
-                  <span className="truncate">{item.rotulo}</span>
+                  <span className="erp-rotulo">{item.rotulo}</span>
                 </Link>
               </li>
             );
@@ -235,13 +217,9 @@ function GrupoMenu({
   );
 }
 
-function classeItem(ativo: boolean): string {
-  return `flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm ${ativo ? "bg-[#00A896] font-medium text-white" : "text-white/70 hover:bg-white/10 hover:text-white"}`;
-}
-
 function Icone({ nome, className }: { nome: IconeNome | "documento" | "painel" | "chevron"; className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={`h-4 w-4 shrink-0 ${className ?? ""}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="16" height="16" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {tracos(nome)}
     </svg>
   );

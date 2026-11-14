@@ -1,0 +1,207 @@
+/* Coluna do menu no fluxo da página: ocupa 16rem e não cobre o conteúdo. */
+.erp-app {
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.erp-menu {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 16rem;
+  background: #003366;
+  color: #fff;
+}
+
+.erp-menu nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem;
+}
+
+.erp-menu ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.erp-menu li,
+.erp-grupo {
+  display: block;
+  position: static;
+  min-width: 0;
+}
+
+.erp-item,
+.erp-sub {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  position: relative;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.erp-item {
+  min-height: 2rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.erp-item:hover,
+.erp-sub:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.erp-item[data-ativo="true"] {
+  background: #00a896;
+  color: #fff;
+  font-weight: 500;
+}
+
+.erp-item[data-ativo="true"]:hover {
+  background: #00a896;
+}
+
+.erp-sub {
+  min-height: 1.75rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.erp-sub[data-ativo="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.erp-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0.25rem 1rem;
+  padding: 0.125rem 0 0.125rem 0.625rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  list-style: none;
+}
+
+.erp-menu svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 1rem;
+}
+
+.erp-rotulo {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.erp-chevron {
+  margin-left: auto;
+  transition: transform 0.15s linear;
+}
+
+.erp-chevron.aberto {
+  transform: rotate(90deg);
+}
+
+.erp-topo {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  height: 4rem;
+  padding: 0 1rem;
+  background: #003366;
+  color: #fff;
+}
+
+.erp-conteudo {
+  min-width: 0;
+}
+
+.erp-conteudo main {
+  padding: 1rem;
+}
+
+.erp-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+
+.erp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  border: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+@media (min-width: 48rem) {
+  .erp-app {
+    display: grid;
+    grid-template-columns: 16rem minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .erp-menu {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: auto;
+  }
+
+  .erp-menu-toggle,
+  .erp-backdrop {
+    display: none;
+  }
+
+  .erp-conteudo main {
+    padding: 2rem;
+  }
+}
+
+@media (max-width: 47.99rem) {
+  .erp-menu {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 40;
+    height: 100vh;
+    overflow: auto;
+    transform: translateX(-100%);
+  }
+
+  .erp-menu.aberto {
+    transform: translateX(0);
+  }
+}
