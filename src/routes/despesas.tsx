@@ -129,14 +129,16 @@ function ListaDespesas() {
   );
   const pessoas = [...new Set(linhas.map((item) => item.favorecidoNome).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")).map((nome) => ({ valor: nome, rotulo: nome }));
   const centrosOpcoes = [...new Map((centros.data ?? []).map((centro) => [centro.id, centro.nome])).entries()].map(([valor, rotuloCentro]) => ({ valor, rotulo: rotuloCentro }));
+  const nomesCentro = new Map((centros.data ?? []).map((centro) => [centro.id, centro.nome]));
   const tabela: LinhaLista[] = filtradas.map((item) => ({
     id: item.id,
     pessoa: item.favorecidoNome,
+    centro: item.centroId ? nomesCentro.get(item.centroId) || item.centroNome : "",
     descricao: item.descricao,
     valor: item.valor,
     vencimento: item.vencimento,
     status: item.contaStatus,
-    detalhe: [item.centroNome, textoRecorrencia(item)].filter(Boolean).join(" · "),
+    detalhe: textoRecorrencia(item) || undefined,
     podeExcluir: item.contaStatus !== "paga",
     motivoBloqueio: "Conta paga não pode ser excluída.",
   }));

@@ -35,6 +35,7 @@ export const filtroVisivelVazio: FiltroVisivel = {
 export type LinhaLista = {
   id: string;
   pessoa: string;
+  centro: string;
   descricao: string;
   valor: number;
   vencimento: string | null;
@@ -229,6 +230,7 @@ export function ListaFinanceira({
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="py-2 pr-3 font-medium">{rotuloPessoa}</th>
+                    <th className="py-2 pr-3 font-medium">Centro de custo</th>
                     <th className="py-2 pr-3 font-medium">Descrição</th>
                     <th className="py-2 pr-3 font-medium">Valor</th>
                     <th className="py-2 pr-3 font-medium">Vencimento</th>
@@ -240,6 +242,7 @@ export function ListaFinanceira({
                   {visiveis.map((linha) => (
                     <tr key={linha.id} className="border-b">
                       <td className="py-2 pr-3">{linha.pessoa || "—"}</td>
+                      <td className="py-2 pr-3">{linha.centro}</td>
                       <td className="py-2 pr-3">
                         <div>{linha.descricao}</div>
                         {linha.detalhe && <div className="text-xs text-muted-foreground">{linha.detalhe}</div>}

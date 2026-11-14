@@ -103,6 +103,7 @@ function ListaReceber() {
     .sort((a, b) => a[1].localeCompare(b[1], "pt-BR"))
     .map(([valor, rotulo]) => ({ valor, rotulo }));
   const centrosOpcoes = [...new Map((centros.data ?? []).map((centro) => [centro.id, centro.nome])).entries()].map(([valor, rotulo]) => ({ valor, rotulo }));
+  const nomesCentro = new Map(centrosOpcoes.map((centro) => [centro.valor, centro.rotulo]));
   const tabela: LinhaLista[] = filtradas.map((titulo) => {
     let podeExcluir = true;
     try {
@@ -113,6 +114,7 @@ function ListaReceber() {
     return {
       id: titulo.id,
       pessoa: titulo.clienteNome || "",
+      centro: titulo.centroId ? nomesCentro.get(titulo.centroId) || "" : "",
       descricao: titulo.descricao,
       valor: titulo.valor,
       vencimento: titulo.vencimento,
