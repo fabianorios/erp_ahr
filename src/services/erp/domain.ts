@@ -376,17 +376,16 @@ export function validarDespesa(input: {
   if (!favorecidoNome) throw new DomainError("Informe o favorecido.");
   const favorecidoDocumento = input.favorecidoDocumento.trim() ? validarDocumento(input.favorecidoDocumento) : null;
   let categoria = input.categoria.trim();
+  if (input.tipoCentro !== "contrato" && input.tipoCentro !== "indireto" && input.tipoCentro !== "financeiro") {
+    throw new DomainError("Escolha o centro de custo.");
+  }
   if (input.tipo === "financeira") {
     if (!CATEGORIAS_FINANCEIRAS.includes(input.categoria as CategoriaFinanceira)) {
       throw new DomainError("Categoria financeira é juros, tarifa bancária ou IOF.");
     }
-    if (input.tipoCentro !== "financeiro") throw new DomainError("Despesa financeira cai só no centro financeiro.");
     categoria = input.categoria;
   } else if (input.tipo === "operacional") {
     if (!categoria) throw new DomainError("Informe a categoria.");
-    if (input.tipoCentro !== "contrato" && input.tipoCentro !== "indireto") {
-      throw new DomainError("Despesa operacional cai em centro de contrato ou indireto.");
-    }
   } else {
     throw new DomainError("Tipo de despesa inválido.");
   }

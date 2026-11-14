@@ -189,7 +189,7 @@ describe("forma de pagamento da proposta", () => {
 });
 
 describe("despesa e conta a pagar", () => {
-  it("separa operacional e financeira pelo centro", () => {
+  it("aceita qualquer centro ativo e mantém a categoria", () => {
     const operacional = validarDespesa({
       tipo: "operacional",
       categoria: "Deslocamento",
@@ -199,25 +199,36 @@ describe("despesa e conta a pagar", () => {
       valor: "200,00",
       competencia: "2026-03",
       vencimento: "2026-03-12",
-      tipoCentro: "contrato",
+      tipoCentro: "financeiro",
     });
     assert.equal(operacional.competencia, "2026-03-01");
+    assert.equal(operacional.categoria, "Deslocamento");
+    const financeira = validarDespesa({
+      tipo: "financeira",
+      categoria: "juros",
+      descricao: "Juros",
+      favorecidoNome: "Banco",
+      favorecidoDocumento: "",
+      valor: "15,00",
+      competencia: "2026-03",
+      vencimento: "2026-03-05",
+      tipoCentro: "contrato",
+    });
+    assert.equal(financeira.categoria, "juros");
     assert.throws(
       () =>
         validarDespesa({
-          ...{
-            tipo: "financeira" as const,
-            categoria: "juros",
-            descricao: "Juros",
-            favorecidoNome: "Banco",
-            favorecidoDocumento: "",
-            valor: "15,00",
-            competencia: "2026-03",
-            vencimento: "2026-03-05",
-            tipoCentro: "contrato" as const,
-          },
+          tipo: "financeira",
+          categoria: "aluguel",
+          descricao: "Juros",
+          favorecidoNome: "Banco",
+          favorecidoDocumento: "",
+          valor: "15,00",
+          competencia: "2026-03",
+          vencimento: "2026-03-05",
+          tipoCentro: "financeiro",
         }),
-      /centro financeiro/,
+      /Categoria financeira/,
     );
     assert.throws(() => pagarDespesa("paga", "2026-03-05"), /conta a pagar/);
     assert.doesNotThrow(() => cancelarDespesa("a_pagar"));

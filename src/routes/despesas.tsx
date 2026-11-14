@@ -326,10 +326,7 @@ function FormularioDespesa({ id }: { id?: string }) {
     });
   }, [id, despesas.data, fornecedores.isLoading, listaFornecedores]);
 
-  const disponiveis = (centros.data ?? []).filter((centro) => {
-    if (!centro.ativo) return false;
-    return form.tipo === "financeira" ? centro.tipo === "financeiro" : centro.tipo !== "financeiro";
-  });
+  const disponiveis = (centros.data ?? []).filter((centro) => centro.ativo);
   const centro = disponiveis.find((item) => item.id === form.centroId) ?? disponiveis[0];
 
   return (
@@ -448,7 +445,7 @@ function FormularioDespesa({ id }: { id?: string }) {
                   </SelectContent>
                 </Select>
               ) : (
-                <p className="text-sm text-muted-foreground">Nenhum centro disponível para este tipo.</p>
+                <p className="text-sm text-muted-foreground">Nenhum centro ativo.</p>
               )}
             </Campo>
             {form.modo === "com_prazo" && !editando && (
