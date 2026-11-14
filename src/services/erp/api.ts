@@ -38,7 +38,7 @@ import {
   reaisToCents,
   registrarBoleto,
   registrarNfse,
-  normalizarCliente,
+  normalizarPessoa,
   somarFluxo,
   validarCentroIndireto,
   validarCusto,
@@ -189,6 +189,12 @@ export type ClienteForm = {
   complemento: string;
 };
 
+export type PessoaForm = ClienteForm & {
+  cliente: boolean;
+  fornecedor: boolean;
+  colaborador: boolean;
+};
+
 export function clienteVazio(): ClienteForm {
   return {
     nome: "",
@@ -204,8 +210,12 @@ export function clienteVazio(): ClienteForm {
   };
 }
 
-export async function salvarCliente(id: string | null, form: ClienteForm): Promise<void> {
-  normalizarCliente(form);
+export function pessoaVazia(): PessoaForm {
+  return { ...clienteVazio(), cliente: false, fornecedor: false, colaborador: false };
+}
+
+export async function salvarPessoa(id: string | null, form: PessoaForm): Promise<void> {
+  normalizarPessoa(form);
   await escrever("cliente.salvar", { ...form, id });
 }
 
@@ -213,7 +223,7 @@ export async function excluirCliente(id: string): Promise<void> {
   await escrever("cliente.excluir", { id });
 }
 
-export type ClienteItem = ClienteForm & { id: string };
+export type ClienteItem = PessoaForm & { id: string };
 
 export type ContatoItem = { id: string; clienteId: string; nome: string; email: string };
 
@@ -249,14 +259,22 @@ export async function listarClientes(): Promise<ClienteItem[]> {
     uf: cliente.uf ?? "",
     cep: cliente.cep ?? "",
     complemento: cliente.complemento ?? "",
+    cliente: cliente.cliente === true,
+    fornecedor: cliente.fornecedor === true,
+    colaborador: cliente.colaborador === true,
   }));
 }
 
 export type ClienteOpcao = { id: string; nome: string; documento: string | null };
 
 export async function listarClientesFinanceiros(): Promise<ClienteOpcao[]> {
-  const clientes = await listarClientes();
-  return clientes.map((cliente) => ({ id: cliente.id, nome: cliente.nome, documento: cliente.documento }));
+  const pessoas = await listarClientes();
+  return pessoas.filter((pessoa) => pessoa.cliente).map((pessoa) => ({ id: pessoa.id, nome: pessoa.nome, documento: pessoa.documento }));
+}
+
+export async function listarFornecedores(): Promise<ClienteOpcao[]> {
+  const pessoas = await listarClientes();
+  return pessoas.filter((pessoa) => pessoa.fornecedor).map((pessoa) => ({ id: pessoa.id, nome: pessoa.nome, documento: pessoa.documento }));
 }
 
 export type DespesaItem = {

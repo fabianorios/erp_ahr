@@ -19,7 +19,7 @@ import {
   faturarTitulo,
   fecharRateio,
   mudarBoleto,
-  normalizarCliente,
+  normalizarPessoa,
   novaVersao,
   novoTitulo,
   pagarBoleto,
@@ -255,29 +255,98 @@ type ClienteLista = {
   uf: string;
   cep: string;
   complemento: string;
+  cliente: boolean;
+  fornecedor: boolean;
+  colaborador: boolean;
 };
 
-async function listarClientes(db: Banco): Promise<{ clientes: ClienteLista[] }> {
-  const { data, error } = await db
-    .from("clients")
-    .select("id, name, document, email, logradouro, numero, bairro, cidade, uf, cep, complemento")
-    .order("name");
+const MENSAGEM_PESSOAS = "Falta o cadastro único de pessoas. Cole sql/pessoas.sql no projeto do ERP.";
+
+function pessoasAusentes(error: { message: string; code?: string } | null): boolean {
+  if (!error) return false;
+  const texto = error.message;
+  const falta = error.code === "42703" || error.code === "PGRST204" || /schema cache|could not find the|does not exist|column/i.test(texto);
+  return falta && /cliente|fornecedor|colaborador|pessoa_id/i.test(texto);
+}
+
+function exigirPessoas(error: { message: string; code?: string } | null): void {
+  if (!error) return;
+  if (pessoasAusentes(error)) throw new DomainError(MENSAGEM_PESSOAS);
   falhar(error);
+}
+
+function linhaCliente(
+  cliente: {
+    id: unknown;
+    name?: string | null;
+    document?: string | null;
+    email?: string | null;
+    logradouro?: string | null;
+    numero?: string | null;
+    bairro?: string | null;
+    cidade?: string | null;
+    uf?: string | null;
+    cep?: string | null;
+    complemento?: string | null;
+  },
+  clienteTipo: boolean,
+  fornecedor: boolean,
+  colaborador: boolean,
+): ClienteLista {
   return {
-    clientes: (data ?? []).map((cliente) => ({
-      id: String(cliente.id),
-      nome: cliente.name ?? "",
-      documento: cliente.document ?? "",
-      email: cliente.email ?? "",
-      logradouro: cliente.logradouro ?? "",
-      numero: cliente.numero ?? "",
-      bairro: cliente.bairro ?? "",
-      cidade: cliente.cidade ?? "",
-      uf: cliente.uf ?? "",
-      cep: cliente.cep ?? "",
-      complemento: cliente.complemento ?? "",
-    })),
+    id: String(cliente.id),
+    nome: cliente.name ?? "",
+    documento: cliente.document ?? "",
+    email: cliente.email ?? "",
+    logradouro: cliente.logradouro ?? "",
+    numero: cliente.numero ?? "",
+    bairro: cliente.bairro ?? "",
+    cidade: cliente.cidade ?? "",
+    uf: cliente.uf ?? "",
+    cep: cliente.cep ?? "",
+    complemento: cliente.complemento ?? "",
+    cliente: clienteTipo,
+    fornecedor,
+    colaborador,
   };
+}
+
+async function listarClientes(db: Banco): Promise<{ clientes: ClienteLista[] }> {
+  const completo = await db
+    .from("clients")
+    .select("id, name, document, email, logradouro, numero, bairro, cidade, uf, cep, complemento, cliente, fornecedor, colaborador")
+    .order("name");
+  if (pessoasAusentes(completo.error)) {
+    const legado = await db
+      .from("clients")
+      .select("id, name, document, email, logradouro, numero, bairro, cidade, uf, cep, complemento")
+      .order("name");
+    falhar(legado.error);
+    return { clientes: (legado.data ?? []).map((cliente) => linhaCliente(cliente, true, false, false)) };
+  }
+  exigirPessoas(completo.error);
+  return {
+    clientes: (completo.data ?? []).map((cliente) => linhaCliente(cliente, cliente.cliente === true, cliente.fornecedor === true, cliente.colaborador === true)),
+  };
+}
+
+async function sincronizarColaborador(db: Banco, pessoaId: string, nome: string, marcado: boolean): Promise<void> {
+  const { data, error } = await db.from("erp_colaboradores").select("id").eq("pessoa_id", pessoaId);
+  exigirPessoas(error);
+  const existente = data?.[0]?.id ? String(data[0].id) : null;
+  if (marcado) {
+    if (existente) {
+      const { error: atualizacao } = await db.from("erp_colaboradores").update({ nome, ativo: true }).eq("id", existente);
+      falhar(atualizacao);
+      return;
+    }
+    const { error: inclusao } = await db.from("erp_colaboradores").insert({ nome, ativo: true, pessoa_id: pessoaId });
+    exigirPessoas(inclusao);
+    return;
+  }
+  if (!existente) return;
+  const { error: pausa } = await db.from("erp_colaboradores").update({ ativo: false }).eq("id", existente);
+  falhar(pausa);
 }
 
 type ContatoLista = { id: string; clienteId: string; nome: string; email: string };
@@ -344,18 +413,36 @@ async function excluirContato(db: Banco, dados: Record<string, unknown>): Promis
 }
 
 async function salvarCliente(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {
-  const payload = normalizarCliente(dados);
-  const id = dados.id == null || dados.id === "" ? null : idDe(dados.id, "Cliente");
+  const pessoa = normalizarPessoa(dados);
+  const payload = {
+    name: pessoa.name,
+    document: pessoa.document,
+    email: pessoa.email,
+    logradouro: pessoa.logradouro,
+    numero: pessoa.numero,
+    bairro: pessoa.bairro,
+    cidade: pessoa.cidade,
+    uf: pessoa.uf,
+    cep: pessoa.cep,
+    complemento: pessoa.complemento,
+    cliente: pessoa.cliente,
+    fornecedor: pessoa.fornecedor,
+    colaborador: pessoa.colaborador,
+  };
+  const id = dados.id == null || dados.id === "" ? null : idDe(dados.id, "Pessoa");
+  let pessoaId = id;
   if (id) {
     const { data, error } = await db.from("clients").update(payload).eq("id", id).select("id");
-    falhar(error);
-    if (!data?.length) throw new DomainError("Cliente não encontrado.");
-    return { id };
+    exigirPessoas(error);
+    if (!data?.length) throw new DomainError("Pessoa não encontrada.");
+  } else {
+    const { data, error } = await db.from("clients").insert(payload).select("id");
+    exigirPessoas(error);
+    if (!data?.[0]?.id) throw new DomainError("Não foi possível gravar a pessoa.");
+    pessoaId = String(data[0].id);
   }
-  const { data, error } = await db.from("clients").insert(payload).select("id");
-  falhar(error);
-  if (!data?.[0]?.id) throw new DomainError("Não foi possível gravar o cliente.");
-  return { id: String(data[0].id) };
+  await sincronizarColaborador(db, pessoaId!, pessoa.name, pessoa.colaborador);
+  return { id: pessoaId ?? undefined };
 }
 
 async function excluirCliente(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {

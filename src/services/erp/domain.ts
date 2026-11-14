@@ -142,6 +142,66 @@ function textoOuNulo(value: unknown): string | null {
   return texto || null;
 }
 
+export type PessoaGravada = {
+  name: string;
+  document: string | null;
+  email: string | null;
+  logradouro: string | null;
+  numero: string | null;
+  bairro: string | null;
+  cidade: string | null;
+  uf: string | null;
+  cep: string | null;
+  complemento: string | null;
+  cliente: boolean;
+  fornecedor: boolean;
+  colaborador: boolean;
+};
+
+export function normalizarPessoa(form: {
+  nome?: unknown;
+  documento?: unknown;
+  email?: unknown;
+  logradouro?: unknown;
+  numero?: unknown;
+  bairro?: unknown;
+  cidade?: unknown;
+  uf?: unknown;
+  cep?: unknown;
+  complemento?: unknown;
+  cliente?: unknown;
+  fornecedor?: unknown;
+  colaborador?: unknown;
+}): PessoaGravada {
+  const cliente = form.cliente === true;
+  const fornecedor = form.fornecedor === true;
+  const colaborador = form.colaborador === true;
+  if (!cliente && !fornecedor && !colaborador) throw new DomainError("Marque ao menos um tipo.");
+  const nome = typeof form.nome === "string" ? form.nome.trim() : "";
+  if (!nome) throw new DomainError("Informe o nome.");
+  const documentoBruto = typeof form.documento === "string" ? form.documento.trim() : "";
+  const document = cliente || fornecedor || documentoBruto ? validarDocumento(documentoBruto) : null;
+  const uf = typeof form.uf === "string" ? form.uf.trim().toUpperCase() : "";
+  if (uf && !/^[A-Z]{2}$/.test(uf)) throw new DomainError("UF com duas letras.");
+  const cep = somenteDigitos(typeof form.cep === "string" ? form.cep : "");
+  if (cep && cep.length !== 8) throw new DomainError("CEP com 8 dígitos.");
+  return {
+    name: nome,
+    document,
+    email: textoOuNulo(form.email),
+    logradouro: textoOuNulo(form.logradouro),
+    numero: textoOuNulo(form.numero),
+    bairro: textoOuNulo(form.bairro),
+    cidade: textoOuNulo(form.cidade),
+    uf: uf || null,
+    cep: cep || null,
+    complemento: textoOuNulo(form.complemento),
+    cliente,
+    fornecedor,
+    colaborador,
+  };
+}
+
 export function normalizarCliente(form: {
   nome?: unknown;
   documento?: unknown;

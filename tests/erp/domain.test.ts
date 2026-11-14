@@ -26,6 +26,7 @@ import {
   margemDoCentro,
   montarAgenda,
   normalizarCliente,
+  normalizarPessoa,
   montarFluxo,
   novaVersao,
   montarTitulosAvulsos,
@@ -82,6 +83,20 @@ describe("dinheiro e documento", () => {
     assert.equal(mascaraDocumento("04252011000110"), "04.252.011/0001-10");
     assert.equal(mascaraDinheiro("123456"), "R$ 1.234,56");
     assert.equal(reaisToCents("R$ 1.234,56"), 123456);
+  });
+
+  it("acumula tipos na mesma pessoa e só exige documento de cliente ou fornecedor", () => {
+    const ambos = normalizarPessoa({ nome: " AHR ", documento: "04.252.011/0001-10", cliente: true, fornecedor: true });
+    assert.equal(ambos.name, "AHR");
+    assert.equal(ambos.cliente, true);
+    assert.equal(ambos.fornecedor, true);
+    assert.equal(ambos.colaborador, false);
+    assert.equal(ambos.document, "04252011000110");
+    const colaborador = normalizarPessoa({ nome: "Ana", colaborador: true, documento: "  " });
+    assert.equal(colaborador.document, null);
+    assert.equal(colaborador.colaborador, true);
+    assert.throws(() => normalizarPessoa({ nome: "Ana" }), DomainError);
+    assert.throws(() => normalizarPessoa({ nome: "Ana", cliente: true }), DomainError);
   });
 
   it("preenche só o campo vazio em mais de um título previsto", () => {

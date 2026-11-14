@@ -6,25 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AvisoConsulta, Campo, CampoDinheiro, Pill, TituloPagina, executar, mesAtual, reais, reaisInput } from "@/components/erp/apresentacao";
 import { useAuth } from "@/lib/auth-context";
-import {
-  alternarColaborador,
-  criarColaborador,
-  excluirColaborador,
-  excluirCusto,
-  listarCentros,
-  listarColaboradores,
-  obterCusto,
-  renomearColaborador,
-  salvarCusto,
-  salvarRateio,
-} from "@/services/erp/api";
+import { excluirCusto, listarCentros, listarColaboradores, obterCusto, salvarCusto, salvarRateio } from "@/services/erp/api";
 import { formatPercentBp, percentToBp, validarCusto, valorRateado } from "@/services/erp/domain";
 
 export function PessoalPage() {
   const { canEdit } = useAuth();
   const qc = useQueryClient();
-  const [nome, setNome] = useState("");
-  const [nomeEdicao, setNomeEdicao] = useState("");
   const [colaboradorId, setColaboradorId] = useState("");
   const [mes, setMes] = useState(mesAtual);
   const [salario, setSalario] = useState("0,00");
@@ -40,10 +27,6 @@ export function PessoalPage() {
   });
   const destinos = (centros.data ?? []).filter((centro) => centro.ativo && centro.tipo !== "financeiro");
   const chave = custo.data ? `${custo.data.id}:${custo.data.status}` : `novo:${colaboradorId}:${mes}`;
-
-  useEffect(() => {
-    setNomeEdicao((colaboradores.data ?? []).find((pessoa) => pessoa.id === colaboradorId)?.nome ?? "");
-  }, [colaboradorId, colaboradores.data]);
 
   useEffect(() => {
     if (custo.data) {
@@ -106,31 +89,9 @@ export function PessoalPage() {
     <div className="space-y-6">
       <TituloPagina
         titulo="Custo de pessoal"
-        descricao="Salário, encargos e benefícios são digitados. O rateio fecha quando a soma chega a 100% e, depois disso, o valor de cada centro fica travado."
+        descricao="O colaborador é uma pessoa do tipo colaborador, em Cadastros. Aqui ficam o custo do mês e o rateio, que fecha em 100%."
       />
       <AvisoConsulta erro={colaboradores.error ?? centros.error ?? custo.error} />
-      {canEdit && (
-        <Card>
-          <CardContent className="py-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="flex-1">
-              <Campo label="Novo colaborador">
-                <Input value={nome} onChange={(e) => setNome(e.target.value)} />
-              </Campo>
-            </div>
-            <Button
-              onClick={() =>
-                executar(async () => {
-                  await criarColaborador(nome);
-                  setNome("");
-                  await recarregar();
-                }, "Colaborador cadastrado")
-              }
-            >
-              Cadastrar
-            </Button>
-          </CardContent>
-        </Card>
-      )}
       <div className="grid gap-3 md:grid-cols-2">
         <Campo label="Colaborador">
           <Select value={colaboradorId || undefined} onValueChange={setColaboradorId}>
@@ -146,26 +107,6 @@ export function PessoalPage() {
           <Input type="month" value={mes} onChange={(e) => setMes(e.target.value)} />
         </Campo>
       </div>
-      {colaboradorId && canEdit && (
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="min-w-60 flex-1">
-            <Campo label="Nome do colaborador">
-              <Input value={nomeEdicao} onChange={(evento) => setNomeEdicao(evento.target.value)} />
-            </Campo>
-          </div>
-          <Button variant="outline" onClick={() => executar(() => renomearColaborador(colaboradorId, nomeEdicao).then(recarregar), "Colaborador atualizado")}>Salvar nome</Button>
-          <Button variant="ghost" onClick={() => executar(async () => { await excluirColaborador(colaboradorId); setColaboradorId(""); setNomeEdicao(""); await recarregar(); }, "Colaborador excluído")}>Excluir colaborador</Button>
-        </div>
-      )}
-      {(colaboradores.data ?? []).length > 0 && canEdit && (
-        <div className="flex flex-wrap gap-2">
-          {(colaboradores.data ?? []).map((pessoa) => (
-            <Button key={pessoa.id} variant="outline" size="sm" onClick={() => executar(() => alternarColaborador(pessoa.id, !pessoa.ativo).then(recarregar), pessoa.ativo ? "Colaborador inativado" : "Colaborador reativado")}>
-              {pessoa.ativo ? "Inativar" : "Reativar"} {pessoa.nome}
-            </Button>
-          ))}
-        </div>
-      )}
       {colaboradorId && (
         <Card>
           <CardContent className="py-4 space-y-4">

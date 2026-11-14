@@ -206,7 +206,7 @@ export function BoletoTitulo({
             <AvisoConsulta erro={contatos.error} />
             {contatos.isLoading && <p className="text-sm text-muted-foreground">Carregando contatos…</p>}
             {titulo.clienteId && !contatos.isLoading && !contatos.error && (contatos.data ?? []).length === 0 && (
-              <p className="text-sm text-muted-foreground">Este cliente ainda não tem contatos. Cadastre nome e e-mail na tela de clientes.</p>
+              <p className="text-sm text-muted-foreground">Este cliente ainda não tem contatos. Cadastre nome e e-mail na tela de Pessoas.</p>
             )}
             {(contatos.data ?? []).map((contato) => (
               <label key={contato.id} className="flex items-center gap-2 text-sm">

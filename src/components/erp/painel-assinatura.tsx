@@ -159,7 +159,7 @@ export function PainelAssinatura({
             <AvisoConsulta erro={contatos.error} />
             {contatos.isLoading && <p className="text-sm text-muted-foreground">Carregando contatos…</p>}
             {lista.length === 0 && !contatos.isLoading && !contatos.error && (
-              <p className="text-sm text-muted-foreground">Este cliente ainda não tem contatos. Cadastre nome e e-mail na tela de clientes.</p>
+              <p className="text-sm text-muted-foreground">Este cliente ainda não tem contatos. Cadastre nome e e-mail na tela de Pessoas.</p>
             )}
             {lista.map((contato) => {
               const indice = ordem.indexOf(contato.id);
@@ -195,7 +195,7 @@ export function PainelAssinatura({
             <AvisoConsulta erro={contatos.error} />
             {contatos.isLoading && <p className="text-sm text-muted-foreground">Carregando contatos…</p>}
             {disponiveis.length === 0 && !contatos.isLoading && !contatos.error && (
-              <p className="text-sm text-muted-foreground">Este cliente não tem outro contato fora deste pedido. Cadastre nome e e-mail na tela de clientes.</p>
+              <p className="text-sm text-muted-foreground">Este cliente não tem outro contato fora deste pedido. Cadastre nome e e-mail na tela de Pessoas.</p>
             )}
             {disponiveis.map((contato) => (
               <label key={contato.id} className="flex items-center gap-2 text-sm">

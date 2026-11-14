@@ -5,19 +5,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AvisoConsulta, Campo, CampoDinheiro, CampoDocumento, Pill, TituloPagina, dataBr, executar, mesAtual, reais, reaisInput, rotulo } from "@/components/erp/apresentacao";
+import { AvisoConsulta, Campo, CampoDinheiro, Pill, TituloPagina, dataBr, executar, mesAtual, reais, reaisInput, rotulo } from "@/components/erp/apresentacao";
 import { ListaFinanceira, filtroVisivelVazio, type FiltroVisivel, type LinhaLista } from "@/components/erp/lista-financeira";
 import { useAuth } from "@/lib/auth-context";
-import { cancelarConta, criarDespesa, encerrarRecorrencia, excluirContaPagar, excluirDespesa, gerarRecorrenciasAbertas, lancarRecorrencia, listarCentros, listarDespesas, pagarConta, salvarDespesa } from "@/services/erp/api";
+import { cancelarConta, criarDespesa, encerrarRecorrencia, excluirContaPagar, excluirDespesa, gerarRecorrenciasAbertas, lancarRecorrencia, listarCentros, listarDespesas, listarFornecedores, pagarConta, salvarDespesa } from "@/services/erp/api";
 import type { DespesaItem } from "@/services/erp/api";
 import { toast } from "sonner";
 import { passaFiltro, type CriterioLista } from "@/services/erp/lista";
-import { reaisToCents, type CentroTipo } from "@/services/erp/domain";
+import { DomainError, mascaraDocumento, reaisToCents, somenteDigitos, type CentroTipo } from "@/services/erp/domain";
 
 const vazio = {
   tipo: "operacional" as "operacional" | "financeira",
   categoria: "",
   descricao: "",
+  favorecidoId: "",
   favorecidoNome: "",
   favorecidoDocumento: "",
   valor: "",
@@ -91,6 +92,7 @@ function ListaDespesas() {
   const qc = useQueryClient();
   const despesas = useQuery({ queryKey: ["erp", "despesas"], queryFn: listarDespesas });
   const centros = useQuery({ queryKey: ["erp", "centros"], queryFn: listarCentros });
+  const fornecedores = useQuery({ queryKey: ["erp", "pessoas", "fornecedor"], queryFn: listarFornecedores });
   const [filtro, setFiltro] = useState(filtroVisivelVazio);
   const geracao = useRef(false);
   const recarregar = () => qc.invalidateQueries({ queryKey: ["erp"] });
@@ -127,7 +129,7 @@ function ListaDespesas() {
       criterio,
     ),
   );
-  const pessoas = [...new Set(linhas.map((item) => item.favorecidoNome).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")).map((nome) => ({ valor: nome, rotulo: nome }));
+  const pessoas = [...new Map((fornecedores.data ?? []).map((pessoa) => [pessoa.nome, { valor: pessoa.nome, rotulo: pessoa.nome }])).values()];
   const centrosOpcoes = [...new Map((centros.data ?? []).map((centro) => [centro.id, centro.nome])).entries()].map(([valor, rotuloCentro]) => ({ valor, rotulo: rotuloCentro }));
   const nomesCentro = new Map((centros.data ?? []).map((centro) => [centro.id, centro.nome]));
   const tabela: LinhaLista[] = filtradas.map((item) => ({
@@ -147,7 +149,7 @@ function ListaDespesas() {
     <ListaFinanceira
       titulo="Contas a pagar"
       descricao="A lista de todos os títulos a pagar. Incluir abre o lançamento e, ao gravar ou cancelar, volta para cá."
-      erro={despesas.error ?? centros.error}
+      erro={despesas.error ?? centros.error ?? fornecedores.error}
       carregando={despesas.isLoading}
       canEdit={canEdit}
       rotuloPessoa="Fornecedor"
@@ -270,6 +272,20 @@ function VerDespesa({ id }: { id: string }) {
   );
 }
 
+function escolherFornecedor(
+  form: typeof vazio,
+  lista: { id: string; nome: string; documento: string | null }[],
+  editando: boolean,
+): { favorecidoNome: string; favorecidoDocumento: string } {
+  if (!form.favorecidoId) {
+    if (!editando) throw new DomainError("Escolha o fornecedor.");
+    return { favorecidoNome: form.favorecidoNome, favorecidoDocumento: form.favorecidoDocumento };
+  }
+  const pessoa = lista.find((item) => item.id === form.favorecidoId);
+  if (!pessoa) throw new DomainError("Escolha o fornecedor.");
+  return { favorecidoNome: pessoa.nome, favorecidoDocumento: pessoa.documento ?? "" };
+}
+
 function FormularioDespesa({ id }: { id?: string }) {
   const navigate = useNavigate();
   const { canEdit } = useAuth();
@@ -279,20 +295,26 @@ function FormularioDespesa({ id }: { id?: string }) {
   const [editando, setEditando] = useState<string | null>(id ?? null);
   const centros = useQuery({ queryKey: ["erp", "centros"], queryFn: listarCentros });
   const despesas = useQuery({ queryKey: ["erp", "despesas"], queryFn: listarDespesas });
+  const fornecedores = useQuery({ queryKey: ["erp", "pessoas", "fornecedor"], queryFn: listarFornecedores });
   const carregado = useRef<string | null>(null);
   const recarregar = () => qc.invalidateQueries({ queryKey: ["erp"] });
+  const listaFornecedores = fornecedores.data ?? [];
 
   useEffect(() => {
-    if (!id || !despesas.data || carregado.current === id) return;
+    if (!id || !despesas.data || fornecedores.isLoading || carregado.current === id) return;
     const item = despesas.data.find((linha) => linha.id === id);
     if (!item) return;
     carregado.current = id;
     setEditando(item.id);
     setMes(item.competencia.slice(0, 7));
+    const documento = somenteDigitos(item.favorecidoDocumento);
+    const pessoa = (documento ? listaFornecedores.find((fornecedor) => somenteDigitos(fornecedor.documento ?? "") === documento) : undefined)
+      ?? listaFornecedores.find((fornecedor) => fornecedor.nome === item.favorecidoNome);
     setForm({
       tipo: item.tipo,
       categoria: item.categoria,
       descricao: item.descricao,
+      favorecidoId: pessoa?.id ?? "",
       favorecidoNome: item.favorecidoNome,
       favorecidoDocumento: item.favorecidoDocumento,
       valor: reaisInput(item.valor),
@@ -302,7 +324,7 @@ function FormularioDespesa({ id }: { id?: string }) {
       diaVencimento: "",
       quantidadeMeses: "",
     });
-  }, [id, despesas.data]);
+  }, [id, despesas.data, fornecedores.isLoading, listaFornecedores]);
 
   const disponiveis = (centros.data ?? []).filter((centro) => {
     if (!centro.ativo) return false;
@@ -319,7 +341,7 @@ function FormularioDespesa({ id }: { id?: string }) {
         />
         <Button type="button" variant="outline" onClick={() => navigate("/despesas")}>Cancelar</Button>
       </div>
-      <AvisoConsulta erro={centros.error ?? despesas.error} />
+      <AvisoConsulta erro={centros.error ?? despesas.error ?? fornecedores.error} />
       {id && !despesas.isLoading && !despesas.data?.some((item) => item.id === id) && <p className="text-sm text-muted-foreground">Título não encontrado.</p>}
       {canEdit && (
         <Card>
@@ -350,12 +372,34 @@ function FormularioDespesa({ id }: { id?: string }) {
             <Campo label="Descrição">
               <Input value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
             </Campo>
-            <Campo label={form.modo === "avulsa" || editando ? "Favorecido" : "Fornecedor"}>
-              <Input value={form.favorecidoNome} onChange={(e) => setForm({ ...form, favorecidoNome: e.target.value })} />
+            <Campo label="Fornecedor">
+              <Select
+                value={form.favorecidoId || undefined}
+                onValueChange={(favorecidoId) => {
+                  const pessoa = listaFornecedores.find((item) => item.id === favorecidoId);
+                  setForm({
+                    ...form,
+                    favorecidoId,
+                    favorecidoNome: pessoa?.nome ?? form.favorecidoNome,
+                    favorecidoDocumento: pessoa?.documento ?? form.favorecidoDocumento,
+                  });
+                }}
+              >
+                <SelectTrigger><SelectValue placeholder="Escolha o fornecedor" /></SelectTrigger>
+                <SelectContent>
+                  {listaFornecedores.map((pessoa) => (
+                    <SelectItem key={pessoa.id} value={pessoa.id}>{pessoa.nome}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Campo>
-            <Campo label={form.modo === "avulsa" || editando ? "Documento do favorecido" : "Documento do fornecedor"}>
-              <CampoDocumento tipo="ambos" value={form.favorecidoDocumento} onChange={(favorecidoDocumento) => setForm({ ...form, favorecidoDocumento })} />
-            </Campo>
+            <p className="text-sm text-muted-foreground md:col-span-2">
+              {form.favorecidoId
+                ? `Documento ${mascaraDocumento(form.favorecidoDocumento) || "não informado"}`
+                : editando && form.favorecidoNome
+                  ? `Gravado antes do cadastro de pessoas: ${form.favorecidoNome}${form.favorecidoDocumento ? ` · ${mascaraDocumento(form.favorecidoDocumento)}` : ""}`
+                  : "A lista traz só pessoas do tipo fornecedor."}
+            </p>
             <Campo label="Valor">
               <CampoDinheiro value={form.valor} onChange={(valor) => setForm({ ...form, valor })} />
             </Campo>
@@ -418,14 +462,15 @@ function FormularioDespesa({ id }: { id?: string }) {
                 onClick={() =>
                   executar(async () => {
                     if (!centro) throw new Error("Cadastre o centro antes da despesa.");
+                    const favorecido = escolherFornecedor(form, listaFornecedores, Boolean(editando));
                     let mensagem: string | undefined;
                     if (editando || form.modo === "avulsa") {
                       const entrada = {
                         tipo: form.tipo,
                         categoria: form.categoria,
                         descricao: form.descricao,
-                        favorecidoNome: form.favorecidoNome,
-                        favorecidoDocumento: form.favorecidoDocumento,
+                        favorecidoNome: favorecido.favorecidoNome,
+                        favorecidoDocumento: favorecido.favorecidoDocumento,
                         valor: form.valor,
                         competencia: mes,
                         vencimento: form.vencimento,
@@ -440,8 +485,8 @@ function FormularioDespesa({ id }: { id?: string }) {
                         tipo: form.tipo,
                         categoria: form.categoria,
                         descricao: form.descricao,
-                        favorecidoNome: form.favorecidoNome,
-                        favorecidoDocumento: form.favorecidoDocumento,
+                        favorecidoNome: favorecido.favorecidoNome,
+                        favorecidoDocumento: favorecido.favorecidoDocumento,
                         valor: form.valor,
                         diaVencimento: form.diaVencimento,
                         primeiroVencimento: form.vencimento,

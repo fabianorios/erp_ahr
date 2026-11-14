@@ -4,7 +4,7 @@ import { TituloPagina } from "@/components/erp/apresentacao";
 
 const atalhos = [
   { href: "/centros", titulo: "Centros de custo", texto: "Contrato, indireto e o centro financeiro." },
-  { href: "/clientes", titulo: "Clientes", texto: "Tomador do serviço, com documento e endereço." },
+  { href: "/pessoas", titulo: "Pessoas", texto: "Cliente, fornecedor e colaborador no mesmo cadastro." },
   { href: "/despesas", titulo: "Contas a pagar", texto: "Gasto operacional, juro, tarifa, IOF e a conta a pagar." },
   { href: "/pessoal", titulo: "Pessoal", texto: "Custo do mês e rateio que fecha em 100%." },
   { href: "/propostas", titulo: "Propostas", texto: "Versão comercial, envio e aceite." },

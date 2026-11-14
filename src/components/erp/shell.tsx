@@ -14,7 +14,7 @@ const menu: Entrada[] = [
     rotulo: "Cadastros",
     icone: "cadastros",
     itens: [
-      { href: "/clientes", rotulo: "Clientes" },
+      { href: "/pessoas", rotulo: "Pessoas" },
       { href: "/centros", rotulo: "Centros" },
     ],
   },

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { supabase, supabaseConfigurado } from "@/integrations/supabase/client";
 import { AuthProvider } from "@/lib/auth-context";
 import { FinanceiroInicio } from "@/routes/inicio";
-import { ClientesPage } from "@/routes/clientes";
+import { PessoasPage } from "@/routes/pessoas";
 import { CentrosPage } from "@/routes/centros";
 import { DespesasPage } from "@/routes/despesas";
 import { PessoalPage } from "@/routes/pessoal";
@@ -111,7 +111,8 @@ function Rotas() {
   return (
     <Routes>
       <Route path="/" element={<FinanceiroInicio />} />
-      <Route path="/clientes" element={<ClientesPage />} />
+      <Route path="/pessoas" element={<PessoasPage />} />
+      <Route path="/clientes" element={<Navigate to="/pessoas" replace />} />
       <Route path="/centros" element={<CentrosPage />} />
       <Route path="/despesas" element={<DespesasPage />} />
       <Route path="/despesas/novo" element={<DespesasPage />} />
