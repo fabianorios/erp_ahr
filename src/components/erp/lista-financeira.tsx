@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -88,11 +88,38 @@ export function ListaFinanceira({
   const [avancado, setAvancado] = useState(false);
   const [tamanho, setTamanho] = useState(25);
   const [pagina, setPagina] = useState(1);
+  const [menu, setMenu] = useState<{ id: string; top: number; left: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const chave = JSON.stringify(filtro);
 
   useEffect(() => {
     setPagina(1);
   }, [chave, tamanho]);
+
+  useEffect(() => {
+    if (!menu) return;
+    function fechar(evento: MouseEvent) {
+      const alvo = evento.target;
+      if (!(alvo instanceof Element)) return;
+      if (alvo.closest("[data-menu-acao]")) return;
+      if (menuRef.current?.contains(alvo)) return;
+      setMenu(null);
+    }
+    function tecla(evento: KeyboardEvent) {
+      if (evento.key === "Escape") setMenu(null);
+    }
+    function recolher() {
+      setMenu(null);
+    }
+    document.addEventListener("mousedown", fechar);
+    document.addEventListener("keydown", tecla);
+    window.addEventListener("resize", recolher);
+    return () => {
+      document.removeEventListener("mousedown", fechar);
+      document.removeEventListener("keydown", tecla);
+      window.removeEventListener("resize", recolher);
+    };
+  }, [menu]);
 
   const paginas = Math.max(1, Math.ceil(linhas.length / tamanho));
   const atual = Math.min(pagina, paginas);
@@ -221,21 +248,44 @@ export function ListaFinanceira({
                       <td className="py-2 pr-3">{dataBr(linha.vencimento)}</td>
                       <td className="py-2 pr-3"><Pill valor={linha.status} /></td>
                       <td className="py-2">
-                        <div className="flex flex-wrap gap-1">
-                          <Button type="button" variant="outline" size="sm" onClick={() => onVer(linha.id)}>Visualizar</Button>
-                          {canEdit && <Button type="button" variant="outline" size="sm" onClick={() => onAlterar(linha.id)}>Alterar</Button>}
+                        <div className="flex items-center gap-1">
+                          <BotaoAcao rotulo="Visualizar" onClick={() => onVer(linha.id)}>
+                            <IconeOlho />
+                          </BotaoAcao>
                           {canEdit && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
+                            <BotaoAcao rotulo="Alterar" onClick={() => onAlterar(linha.id)}>
+                              <IconeLapis />
+                            </BotaoAcao>
+                          )}
+                          {canEdit && (
+                            <BotaoAcao
+                              rotulo="Excluir"
+                              dica={linha.podeExcluir ? "Excluir" : linha.motivoBloqueio}
                               disabled={!linha.podeExcluir}
-                              title={linha.podeExcluir ? "Excluir" : linha.motivoBloqueio}
                               onClick={() => onExcluir(linha.id)}
                             >
-                              Excluir
-                            </Button>
+                              <IconeLixeira />
+                            </BotaoAcao>
                           )}
+                          <button
+                            type="button"
+                            data-menu-acao=""
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-lg leading-none text-foreground hover:bg-accent"
+                            aria-label="Mais ações"
+                            aria-haspopup="menu"
+                            aria-expanded={menu?.id === linha.id}
+                            title="Mais ações"
+                            onClick={(evento) => {
+                              if (menu?.id === linha.id) {
+                                setMenu(null);
+                                return;
+                              }
+                              const rect = evento.currentTarget.getBoundingClientRect();
+                              setMenu({ id: linha.id, top: rect.bottom + 4, left: rect.right });
+                            }}
+                          >
+                            …
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -268,6 +318,65 @@ export function ListaFinanceira({
         <p>Total da página: {totais.quantidadePagina} {totais.quantidadePagina === 1 ? "título" : "títulos"} · {reais(totais.valorPagina)}</p>
         <p>Total do filtro: {totais.quantidadeFiltro} {totais.quantidadeFiltro === 1 ? "título" : "títulos"} · {reais(totais.valorFiltro)}</p>
       </div>
+      {menu && (
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label="Mais ações"
+          className="fixed z-50 min-w-36 rounded-md border bg-card py-1 text-sm shadow"
+          style={{ top: menu.top, left: menu.left, transform: "translateX(-100%)" }}
+        >
+          <div role="menuitem" className="px-3 py-1.5">Baixar</div>
+          <div role="menuitem" className="px-3 py-1.5">Prorrogar</div>
+          <div role="menuitem" className="px-3 py-1.5">Bloquear</div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function BotaoAcao({ rotulo, dica, disabled, onClick, children }: { rotulo: string; dica?: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {
+  const texto = dica ?? rotulo;
+  const botao = (
+    <button
+      type="button"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+      aria-label={rotulo}
+      title={texto}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+  if (!disabled) return botao;
+  return <span title={texto} className="inline-flex">{botao}</span>;
+}
+
+function IconeOlho() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function IconeLapis() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
+  );
+}
+
+function IconeLixeira() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+    </svg>
   );
 }
