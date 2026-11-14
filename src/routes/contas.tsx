@@ -123,7 +123,7 @@ export function ContasPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <TituloPagina
-          titulo="Manutenção de contas a receber"
+          titulo="Contas a receber"
           descricao="Gerar NF emite a nota no valor cheio do serviço. Informe a quantidade, o valor e o vencimento de cada parcela; a soma fecha o valor da nota. Uma parcela abre um título. Várias parcelas, se o portal autorizar, abrem um título cada, todos com o mesmo número e o mesmo PDF. No título já criado ficam o boleto, o kit, o vencimento, o cancelamento e a baixa."
         />
         <AtalhoConsulta />

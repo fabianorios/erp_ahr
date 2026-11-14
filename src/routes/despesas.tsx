@@ -140,7 +140,7 @@ export function DespesasPage() {
   return (
     <div className="space-y-6">
       <TituloPagina
-        titulo="Despesas"
+        titulo="Contas a pagar"
         descricao="Cada despesa abre uma conta a pagar. A recorrência com prazo projeta um título por mês. A sem prazo lança o mês atual e, no mês seguinte, gera o próximo até encerrar. Operacional cai em contrato ou indireto. Financeira cai só no centro financeiro e fica fora da margem."
       />
       <AvisoConsulta erro={centros.error ?? despesas.error} />

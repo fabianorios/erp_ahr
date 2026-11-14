@@ -18,7 +18,7 @@ export function Dialog({
 }
 
 export function DialogContent({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={`w-full max-w-lg rounded-lg bg-white p-4 ${className ?? ""}`}>{children}</div>;
+  return <div className={`w-full max-w-lg rounded-xl border bg-card p-6 text-card-foreground shadow-lg ${className ?? ""}`}>{children}</div>;
 }
 
 export function DialogHeader({ children }: { children: ReactNode }) {

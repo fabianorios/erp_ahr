@@ -8,14 +8,14 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const variantes = {
-  default: "bg-primary text-primary-foreground hover:opacity-90",
-  outline: "border border-border bg-card hover:bg-secondary",
-  ghost: "hover:bg-accent",
+  default: "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+  outline: "border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground",
+  ghost: "hover:bg-accent hover:text-accent-foreground",
 };
 
 const tamanhos = {
-  default: "px-3 py-2 text-sm",
-  sm: "px-2 py-1 text-xs",
+  default: "h-9 px-4 py-2 text-sm",
+  sm: "h-8 rounded-md px-3 text-xs",
 };
 
 export function Button({ variant = "default", size = "default", asChild, className, children, ...props }: Props) {
