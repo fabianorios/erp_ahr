@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { AvisoConsulta, Campo, CampoDocumento, CamposEndereco, TituloPagina, executar } from "@/components/erp/apresentacao";
 import { useAuth } from "@/lib/auth-context";
 import { excluirCliente, excluirContato, listarClientes, listarContatos, pessoaVazia, salvarContato, salvarPessoa, type PessoaForm } from "@/services/erp/api";
-import { mascaraDocumento, somenteDigitos } from "@/services/erp/domain";
+import { camposDoCnpj, cnpjParaConsultar, mascaraDocumento, somenteDigitos, type RespostaCnpj } from "@/services/erp/domain";
 
 function rotuloTipos(pessoa: Pick<PessoaForm, "cliente" | "fornecedor" | "colaborador">): string {
   return [
@@ -108,49 +108,96 @@ function FormularioPessoa({
 }: {
   id: string | null;
   form: PessoaForm;
-  setForm: (form: PessoaForm) => void;
+  setForm: Dispatch<SetStateAction<PessoaForm>>;
   onVoltar: () => void;
 }) {
   const qc = useQueryClient();
+  const consultado = useRef("");
+  const pedido = useRef(0);
+  const [consultando, setConsultando] = useState(false);
+  const [avisoCnpj, setAvisoCnpj] = useState("");
+
+  function aoDocumento(documento: string) {
+    setForm((atual) => ({ ...atual, documento }));
+    setAvisoCnpj("");
+    const cnpj = cnpjParaConsultar(documento, consultado.current);
+    if (!cnpj) return;
+    consultado.current = cnpj;
+    const este = ++pedido.current;
+    setConsultando(true);
+    void fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`)
+      .then(async (resposta) => {
+        if (!resposta.ok) throw new Error("consulta");
+        return (await resposta.json()) as RespostaCnpj;
+      })
+      .then((dados) => {
+        if (pedido.current !== este) return;
+        const campos = camposDoCnpj(dados);
+        setForm((atual) => {
+          if (somenteDigitos(atual.documento) !== cnpj) return atual;
+          return {
+            ...atual,
+            nome: campos.nome || atual.nome,
+            logradouro: campos.logradouro || atual.logradouro,
+            numero: campos.numero || atual.numero,
+            complemento: campos.complemento || atual.complemento,
+            bairro: campos.bairro || atual.bairro,
+            cidade: campos.cidade || atual.cidade,
+            uf: campos.uf || atual.uf,
+            cep: campos.cep || atual.cep,
+          };
+        });
+      })
+      .catch(() => {
+        if (pedido.current !== este) return;
+        if (consultado.current === cnpj) consultado.current = "";
+        setAvisoCnpj("Não foi possível consultar o CNPJ. Preencha nome e endereço.");
+      })
+      .finally(() => {
+        if (pedido.current === este) setConsultando(false);
+      });
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <TituloPagina
           titulo={id ? "Alterar pessoa" : "Incluir pessoa"}
-          descricao="Marque um ou mais tipos. Cliente e fornecedor pedem CPF ou CNPJ. Colaborador pode ficar sem documento."
+          descricao="O CNPJ completa a razão social e o endereço. O CPF fica manual. O CEP preenche logradouro, bairro, cidade e UF."
         />
         <Button type="button" variant="outline" onClick={onVoltar}>Cancelar</Button>
       </div>
       <Card>
         <CardContent className="grid gap-3 py-4">
+          <Campo label="CPF ou CNPJ">
+            <CampoDocumento tipo="ambos" value={form.documento} onChange={aoDocumento} />
+          </Campo>
+          {consultando && <p className="text-sm text-muted-foreground">Consultando CNPJ…</p>}
+          {avisoCnpj && <p className="text-sm text-destructive">{avisoCnpj}</p>}
           <fieldset className="flex flex-wrap gap-4">
             <legend className="mb-2 text-sm font-medium">Tipos</legend>
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.cliente} onChange={(event) => setForm({ ...form, cliente: event.target.checked })} />
+              <input type="checkbox" checked={form.cliente} onChange={(event) => setForm((atual) => ({ ...atual, cliente: event.target.checked }))} />
               Cliente
             </label>
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.fornecedor} onChange={(event) => setForm({ ...form, fornecedor: event.target.checked })} />
+              <input type="checkbox" checked={form.fornecedor} onChange={(event) => setForm((atual) => ({ ...atual, fornecedor: event.target.checked }))} />
               Fornecedor
             </label>
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.colaborador} onChange={(event) => setForm({ ...form, colaborador: event.target.checked })} />
+              <input type="checkbox" checked={form.colaborador} onChange={(event) => setForm((atual) => ({ ...atual, colaborador: event.target.checked }))} />
               Colaborador
             </label>
           </fieldset>
-          <Campo label="Nome">
-            <Input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} />
-          </Campo>
           <div className="grid gap-3 md:grid-cols-2">
-            <Campo label="CPF ou CNPJ">
-              <CampoDocumento tipo="ambos" value={form.documento} onChange={(documento) => setForm({ ...form, documento })} />
+            <Campo label="Nome">
+              <Input value={form.nome} onChange={(event) => setForm((atual) => ({ ...atual, nome: event.target.value }))} />
             </Campo>
             <Campo label="E-mail">
-              <Input value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
+              <Input value={form.email} onChange={(event) => setForm((atual) => ({ ...atual, email: event.target.value }))} />
             </Campo>
           </div>
-          <CamposEndereco value={form} onChange={(patch) => setForm({ ...form, ...patch })} />
+          <CamposEndereco value={form} onChange={(patch) => setForm((atual) => ({ ...atual, ...patch }))} />
           <div className="flex gap-2">
             <Button
               onClick={() =>
@@ -172,14 +219,14 @@ function FormularioPessoa({
                 const resposta = await fetch(`https://brasilapi.com.br/api/cep/v2/${cep}`);
                 if (!resposta.ok) return;
                 const dados = (await resposta.json()) as { street?: string; neighborhood?: string; city?: string; state?: string };
-                setForm({
-                  ...form,
+                setForm((atual) => ({
+                  ...atual,
                   cep,
-                  logradouro: dados.street ?? form.logradouro,
-                  bairro: dados.neighborhood ?? form.bairro,
-                  cidade: dados.city ?? form.cidade,
-                  uf: dados.state ?? form.uf,
-                });
+                  logradouro: dados.street ?? atual.logradouro,
+                  bairro: dados.neighborhood ?? atual.bairro,
+                  cidade: dados.city ?? atual.cidade,
+                  uf: dados.state ?? atual.uf,
+                }));
               }}
             >
               Buscar CEP

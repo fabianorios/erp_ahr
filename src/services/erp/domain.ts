@@ -116,6 +116,62 @@ export function somenteDigitos(value: string): string {
   return value.replace(/\D/g, "");
 }
 
+export type RespostaCnpj = {
+  razao_social?: unknown;
+  descricao_tipo_de_logradouro?: unknown;
+  logradouro?: unknown;
+  numero?: unknown;
+  complemento?: unknown;
+  bairro?: unknown;
+  municipio?: unknown;
+  uf?: unknown;
+  cep?: unknown;
+};
+
+export type CamposCnpj = {
+  nome: string;
+  logradouro: string;
+  numero: string;
+  complemento: string;
+  bairro: string;
+  cidade: string;
+  uf: string;
+  cep: string;
+};
+
+function textoApi(valor: unknown): string {
+  return typeof valor === "string" ? valor.trim() : "";
+}
+
+/** CNPJ da Brasil API vira razão social e endereço. CPF não entra aqui. */
+export function camposDoCnpj(dados: RespostaCnpj): CamposCnpj {
+  const tipo = textoApi(dados.descricao_tipo_de_logradouro);
+  const rua = textoApi(dados.logradouro);
+  const ruaMin = rua.toLocaleLowerCase("pt-BR");
+  const tipoMin = tipo.toLocaleLowerCase("pt-BR");
+  const jaTemTipo = Boolean(tipo) && (ruaMin.startsWith(tipoMin) || ruaMin.includes(` ${tipoMin}`));
+  const logradouro = !rua ? tipo : !tipo || jaTemTipo ? rua : `${tipo} ${rua}`;
+  const uf = textoApi(dados.uf).toUpperCase();
+  const cep = somenteDigitos(textoApi(dados.cep));
+  return {
+    nome: textoApi(dados.razao_social),
+    logradouro,
+    numero: textoApi(dados.numero),
+    complemento: textoApi(dados.complemento),
+    bairro: textoApi(dados.bairro),
+    cidade: textoApi(dados.municipio),
+    uf: /^[A-Z]{2}$/.test(uf) ? uf : "",
+    cep: cep.length === 8 ? cep : "",
+  };
+}
+
+/** Só um CNPJ completo e ainda não consultado dispara a busca. Onze dígitos é CPF. */
+export function cnpjParaConsultar(documento: string, jaConsultado: string): string | null {
+  const digitos = somenteDigitos(documento);
+  if (digitos.length !== 14 || digitos === jaConsultado) return null;
+  return digitos;
+}
+
 export function validarDocumento(value: string): string {
   const digits = somenteDigitos(value);
   if (digits.length !== 11 && digits.length !== 14) {

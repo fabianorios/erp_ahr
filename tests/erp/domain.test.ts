@@ -27,6 +27,8 @@ import {
   montarAgenda,
   normalizarCliente,
   normalizarPessoa,
+  camposDoCnpj,
+  cnpjParaConsultar,
   montarFluxo,
   novaVersao,
   montarTitulosAvulsos,
@@ -97,6 +99,32 @@ describe("dinheiro e documento", () => {
     assert.equal(colaborador.colaborador, true);
     assert.throws(() => normalizarPessoa({ nome: "Ana" }), DomainError);
     assert.throws(() => normalizarPessoa({ nome: "Ana", cliente: true }), DomainError);
+  });
+
+  it("consulta o CNPJ com 14 dígitos e deixa o CPF manual", () => {
+    assert.equal(cnpjParaConsultar("123.456.789-09", ""), null);
+    assert.equal(cnpjParaConsultar("00.000.000/0001-91", ""), "00000000000191");
+    assert.equal(cnpjParaConsultar("00.000.000/0001-91", "00000000000191"), null);
+    const campos = camposDoCnpj({
+      razao_social: " BANCO DO BRASIL SA ",
+      descricao_tipo_de_logradouro: "RUA",
+      logradouro: "DAS FLORES",
+      numero: "10",
+      complemento: "SALA 2",
+      bairro: "CENTRO",
+      municipio: "BRASILIA",
+      uf: "df",
+      cep: "70040-912",
+    });
+    assert.equal(campos.nome, "BANCO DO BRASIL SA");
+    assert.equal(campos.logradouro, "RUA DAS FLORES");
+    assert.equal(campos.numero, "10");
+    assert.equal(campos.complemento, "SALA 2");
+    assert.equal(campos.bairro, "CENTRO");
+    assert.equal(campos.cidade, "BRASILIA");
+    assert.equal(campos.uf, "DF");
+    assert.equal(campos.cep, "70040912");
+    assert.equal(camposDoCnpj({ descricao_tipo_de_logradouro: "QUADRA", logradouro: "SAUN QUADRA 5" }).logradouro, "SAUN QUADRA 5");
   });
 
   it("preenche só o campo vazio em mais de um título previsto", () => {
