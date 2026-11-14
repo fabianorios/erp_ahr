@@ -6,7 +6,7 @@
     "dev": "node scripts/dev.mjs",
     "api": "node --experimental-strip-types --env-file=.env server/index.ts",
     "build": "tsc --noEmit && vite build",
-    "test": "node --experimental-strip-types --test tests/erp/domain.test.ts tests/erp/assinatura.test.ts tests/erp/cora.test.ts tests/erp/nfse-nacional.test.ts tests/erp/danfse.test.ts"
+    "test": "node --experimental-strip-types --test tests/erp/domain.test.ts tests/erp/assinatura.test.ts tests/erp/cora.test.ts tests/erp/nfse-nacional.test.ts tests/erp/danfse.test.ts tests/erp/lista.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.5",

@@ -56,27 +56,30 @@
 }
 
 .erp-item {
-  min-height: 2rem;
-  padding: 0.25rem 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.75rem;
   font-size: 0.875rem;
   line-height: 1.25rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: #fff;
+  border-radius: 0.5rem;
 }
 
 .erp-item:hover,
 .erp-sub:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
 
-.erp-item[data-ativo="true"] {
-  background: #00a896;
+.erp-item[data-ativo="true"],
+.erp-sub[data-ativo="true"] {
+  background: #1a4876;
   color: #fff;
   font-weight: 500;
 }
 
-.erp-item[data-ativo="true"]:hover {
-  background: #00a896;
+.erp-item[data-ativo="true"]:hover,
+.erp-sub[data-ativo="true"]:hover {
+  background: #1a4876;
 }
 
 .erp-sub {
@@ -84,22 +87,24 @@
   padding: 0.125rem 0.5rem;
   font-size: 0.75rem;
   line-height: 1rem;
-  color: rgba(255, 255, 255, 0.55);
-}
-
-.erp-sub[data-ativo="true"] {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .erp-subs {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  margin: 0.25rem 0 0.25rem 1rem;
-  padding: 0.125rem 0 0.125rem 0.625rem;
-  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  gap: 0.125rem;
+  margin: 0.125rem 0 0.25rem 1.85rem;
+  padding: 0;
   list-style: none;
+}
+
+.erp-bolinha {
+  width: 0.3125rem;
+  height: 0.3125rem;
+  flex: 0 0 0.3125rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
 }
 
 .erp-menu svg {

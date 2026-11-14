@@ -1,18 +1,19 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { AvisoConsulta, Campo, CampoDinheiro, TituloPagina, dataBr, executar, reaisInput } from "@/components/erp/apresentacao";
-import { AtalhoConsulta } from "@/components/erp/atalho-consulta";
+import { AvisoConsulta, Campo, CampoDinheiro, Pill, TituloPagina, dataBr, executar, reais, reaisInput } from "@/components/erp/apresentacao";
 import { BoletoTitulo } from "@/components/erp/boleto-titulo";
+import { ListaFinanceira, filtroVisivelVazio, type LinhaLista } from "@/components/erp/lista-financeira";
 import { textoParcela } from "@/components/erp/rotulos-titulo";
 import { useAuth } from "@/lib/auth-context";
-import { abrirPdfBoleto, abrirPdfNfse, atualizarTitulo, buscarPdfNfse, cancelarNfseNacional, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, obterTitulo, type TituloItem } from "@/services/erp/api";
-import { DomainError, formatBrl, reaisToCents } from "@/services/erp/domain";
+import { abrirPdfBoleto, abrirPdfNfse, atualizarTitulo, buscarPdfNfse, cancelarNfseNacional, criarTituloAvulso, emitirNfNacional, excluirTitulo, listarCentros, listarClientesFinanceiros, listarTitulos, obterTitulo, type TituloItem } from "@/services/erp/api";
+import { DomainError, formatBrl, podeExcluirTitulo, reaisToCents } from "@/services/erp/domain";
+import { passaFiltro, type CriterioLista } from "@/services/erp/lista";
 import { dividirNota } from "@/services/erp/nfse-nacional";
 
 const ORIGENS = ["Word", "Outro sistema"] as const;
@@ -35,8 +36,126 @@ const vazio = {
   texto: "",
 };
 
+const STATUS_RECEBER = [
+  { valor: "previsto", rotulo: "Previsto" },
+  { valor: "faturado", rotulo: "Faturado" },
+  { valor: "recebido", rotulo: "Recebido" },
+  { valor: "cancelado", rotulo: "Cancelado" },
+];
+
+const RECORRENCIAS_RECEBER = [
+  { valor: "avulsa", rotulo: "Sem parcela" },
+  { valor: "parcelado", rotulo: "Parcelada" },
+];
+
+const DOCUMENTOS = [
+  { valor: "todos", rotulo: "Todas" },
+  { valor: "com_nota", rotulo: "Com nota" },
+  { valor: "com_boleto", rotulo: "Com boleto" },
+  { valor: "nota_ou_boleto", rotulo: "Com nota ou boleto" },
+  { valor: "sem_nota_boleto", rotulo: "Sem nota e sem boleto" },
+];
+
 export function ContasPage() {
   const { id } = useParams();
+  const caminho = useLocation().pathname;
+  const incluindo = caminho.endsWith("/novo");
+  const alterando = caminho.endsWith("/editar");
+  if (!id && !incluindo) return <ListaReceber />;
+  return <FormularioReceber id={id} incluindo={incluindo} alterando={alterando} />;
+}
+
+function ListaReceber() {
+  const navigate = useNavigate();
+  const { canEdit } = useAuth();
+  const qc = useQueryClient();
+  const titulos = useQuery({ queryKey: ["erp", "titulos", "lista"], queryFn: listarTitulos });
+  const centros = useQuery({ queryKey: ["erp", "centros"], queryFn: listarCentros });
+  const [filtro, setFiltro] = useState(filtroVisivelVazio);
+  const linhas = titulos.data ?? [];
+  const criterio: CriterioLista = {
+    de: filtro.de,
+    ate: filtro.ate,
+    pessoa: filtro.pessoa,
+    status: filtro.status,
+    valorMin: limite(filtro.valorMin),
+    valorMax: limite(filtro.valorMax),
+    centro: filtro.centro,
+    recorrencia: filtro.recorrencia,
+    documento: filtro.documento,
+  };
+  const filtradas = linhas.filter((titulo) =>
+    passaFiltro(
+      {
+        pessoaId: titulo.clienteId ?? "",
+        status: titulo.status,
+        vencimento: titulo.vencimento,
+        valor: titulo.valor,
+        centroId: titulo.centroId ?? "",
+        recorrencia: titulo.quantidadeParcelas && titulo.quantidadeParcelas > 1 ? "parcelado" : "avulsa",
+        nota: Boolean(titulo.nfse),
+        boleto: Boolean(titulo.boleto),
+      },
+      criterio,
+    ),
+  );
+  const pessoas = [...new Map(linhas.filter((titulo) => titulo.clienteId).map((titulo) => [titulo.clienteId as string, titulo.clienteNome || "Cliente"])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], "pt-BR"))
+    .map(([valor, rotulo]) => ({ valor, rotulo }));
+  const centrosOpcoes = [...new Map((centros.data ?? []).map((centro) => [centro.id, centro.nome])).entries()].map(([valor, rotulo]) => ({ valor, rotulo }));
+  const tabela: LinhaLista[] = filtradas.map((titulo) => {
+    let podeExcluir = true;
+    try {
+      podeExcluirTitulo(Boolean(titulo.nfse), Boolean(titulo.boleto));
+    } catch {
+      podeExcluir = false;
+    }
+    return {
+      id: titulo.id,
+      pessoa: titulo.clienteNome || "",
+      descricao: titulo.descricao,
+      valor: titulo.valor,
+      vencimento: titulo.vencimento,
+      status: titulo.status,
+      detalhe: textoParcela(titulo.parcela, titulo.quantidadeParcelas) || undefined,
+      podeExcluir,
+      motivoBloqueio: "O título tem nota ou boleto e não pode ser excluído.",
+    };
+  });
+
+  return (
+    <ListaFinanceira
+      titulo="Contas a receber"
+      descricao="A lista de todos os títulos a receber. Incluir abre o formulário e, ao gravar ou cancelar, volta para cá."
+      erro={titulos.error ?? centros.error}
+      carregando={titulos.isLoading}
+      canEdit={canEdit}
+      rotuloPessoa="Cliente"
+      pessoas={pessoas}
+      statusOpcoes={STATUS_RECEBER}
+      centros={centrosOpcoes}
+      recorrencias={RECORRENCIAS_RECEBER}
+      documentos={DOCUMENTOS}
+      filtro={filtro}
+      onFiltro={setFiltro}
+      linhas={tabela}
+      onIncluir={() => navigate("/contas/novo")}
+      onVer={(itemId) => navigate(`/contas/${itemId}`)}
+      onAlterar={(itemId) => navigate(`/contas/${itemId}/editar`)}
+      onExcluir={(itemId) => {
+        const titulo = linhas.find((linha) => linha.id === itemId);
+        if (!titulo) return;
+        void executar(async () => {
+          await excluirTitulo(titulo);
+          await qc.invalidateQueries({ queryKey: ["erp", "titulos"] });
+        }, "Título excluído");
+      }}
+    />
+  );
+}
+
+function FormularioReceber({ id, incluindo, alterando }: { id?: string; incluindo: boolean; alterando: boolean }) {
+  const vendo = Boolean(id) && !alterando && !incluindo;
   const navigate = useNavigate();
   const { canEdit } = useAuth();
   const qc = useQueryClient();
@@ -59,11 +178,6 @@ export function ContasPage() {
     const vencimentos = Array.from({ length: total }, (_, indice) => form.vencimentos[indice] ?? "");
     const valores = Array.from({ length: total }, (_, indice) => form.valores[indice] ?? "");
     setForm({ ...form, quantidade: valor, vencimentos, valores });
-  }
-
-  function limpar() {
-    setEditando(null);
-    setForm(vazio);
   }
 
   function abrir(titulo: TituloItem) {
@@ -123,13 +237,29 @@ export function ContasPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <TituloPagina
-          titulo="Contas a receber"
+          titulo={vendo ? "Título a receber" : alterando ? "Alterar conta a receber" : "Incluir conta a receber"}
           descricao="Gerar NF emite a nota no valor cheio do serviço. Informe a quantidade, o valor e o vencimento de cada parcela; a soma fecha o valor da nota. Uma parcela abre um título. Várias parcelas, se o portal autorizar, abrem um título cada, todos com o mesmo número e o mesmo PDF. No título já criado ficam o boleto, o kit, o vencimento, o cancelamento e a baixa."
         />
-        <AtalhoConsulta />
+        <Button type="button" variant="outline" onClick={() => navigate("/contas")}>{vendo ? "Voltar para a lista" : "Cancelar"}</Button>
       </div>
       <AvisoConsulta erro={aberto.error ?? centros.error} />
-      {canEdit && (
+      {vendo && editando && (
+        <Card>
+          <CardContent className="space-y-2 py-4">
+            <div className="font-medium">{editando.descricao}</div>
+            <p className="text-sm text-muted-foreground">
+              {editando.clienteNome || "Sem cliente"} · {reais(editando.valor)} · vence {dataBr(editando.vencimento)}
+            </p>
+            <Pill valor={editando.status} />
+            {canEdit && (
+              <div>
+                <Button type="button" variant="outline" onClick={() => navigate(`/contas/${editando.id}/editar`)}>Alterar</Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {canEdit && !vendo && (
         <Card>
           <CardContent className="py-4">
             <fieldset disabled={!podeMudar} className="grid gap-3">
@@ -298,7 +428,7 @@ export function ContasPage() {
                           }))
                         : undefined;
                       if (parcelas) dividirNota({ valor: form.valor, vencimento: parcelas[0]?.vencimento ?? "", parcelas });
-                      const criado = await emitirNfNacional({
+                      await emitirNfNacional({
                         clienteId: form.clienteId,
                         descricao: form.descricao,
                         valor: form.valor,
@@ -313,7 +443,7 @@ export function ContasPage() {
                         parcelas,
                       });
                       await recarregar();
-                      navigate(`/contas/${criado}`);
+                      navigate("/contas");
                     }, quantidade > 1 ? "NFS-e autorizada. Cada parcela virou um título com a mesma nota." : "NFS-e autorizada. O título nasceu da nota.")
                   }
                 >
@@ -356,15 +486,14 @@ export function ContasPage() {
                         centroId: form.centroId,
                       });
                     }
-                    if (!editando) {
-                      limpar();
-                      await recarregar();
-                    }
+                    await recarregar();
+                    navigate("/contas");
                   }, editando ? "Título atualizado" : "Título previsto criado")
                 }
               >
-                {editando ? "Salvar título" : "Criar título previsto"}
+                Gravar
               </Button>
+              <Button type="button" variant="ghost" onClick={() => navigate("/contas")}>Cancelar</Button>
             </div>}
             </fieldset>
           </CardContent>
@@ -483,6 +612,15 @@ export function ContasPage() {
       {canEdit && editando && <BoletoTitulo titulo={editando} alterado={alterado} erroBoleto={erroBoleto} onMudou={recarregar} />}
     </div>
   );
+}
+
+function limite(texto: string): number | null {
+  if (!texto.trim()) return null;
+  try {
+    return reaisToCents(texto);
+  } catch {
+    return null;
+  }
 }
 
 function centavosDoForm(valor: string): number | null {

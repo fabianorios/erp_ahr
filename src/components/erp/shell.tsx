@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 
-type IconeNome = "inicio" | "cadastros" | "financeiro" | "pessoal" | "propostas" | "contratos" | "consulta" | "fluxo" | "margem";
+type IconeNome = "inicio" | "cadastros" | "financeiro" | "pessoal" | "propostas" | "contratos" | "fluxo" | "margem";
 type Item = { href: string; rotulo: string };
 type Entrada =
   | { tipo: "link"; href: string; rotulo: string; icone: IconeNome }
@@ -30,14 +30,13 @@ const menu: Entrada[] = [
   { tipo: "link", href: "/pessoal", rotulo: "Pessoal", icone: "pessoal" },
   { tipo: "link", href: "/propostas", rotulo: "Propostas", icone: "propostas" },
   { tipo: "link", href: "/contratos", rotulo: "Contratos", icone: "contratos" },
-  { tipo: "link", href: "/contas/consulta", rotulo: "Consulta de títulos a receber", icone: "consulta" },
   { tipo: "link", href: "/fluxo", rotulo: "Fluxo", icone: "fluxo" },
   { tipo: "link", href: "/margem", rotulo: "Margem", icone: "margem" },
 ];
 
 export function itemAtivo(href: string, caminho: string): boolean {
   if (href === "/") return caminho === "/";
-  if (href === "/contas") return caminho === "/contas" || /^\/contas\/(?!consulta(?:\/|$))[^/]+$/.test(caminho);
+  if (href === "/contas") return caminho === "/contas" || (caminho.startsWith("/contas/") && !caminho.startsWith("/contas/consulta"));
   return caminho === href || caminho.startsWith(`${href}/`);
 }
 
@@ -190,10 +189,9 @@ function GrupoMenu({
   aberto: boolean;
   onToggle: () => void;
 }) {
-  const ativo = entrada.itens.some((item) => itemAtivo(item.href, caminho));
   return (
     <div className="erp-grupo">
-      <button type="button" className="erp-item" data-ativo={ativo ? "true" : "false"} aria-expanded={aberto} onClick={onToggle}>
+      <button type="button" className="erp-item" data-ativo="false" aria-expanded={aberto} onClick={onToggle}>
         <Icone nome={entrada.icone} />
         <span className="erp-rotulo">{entrada.rotulo}</span>
         <Icone nome="chevron" className={`erp-chevron ${aberto ? "aberto" : ""}`} />
@@ -205,7 +203,7 @@ function GrupoMenu({
             return (
               <li key={item.href}>
                 <Link to={item.href} className="erp-sub" data-ativo={subAtivo ? "true" : "false"} aria-current={subAtivo ? "page" : undefined}>
-                  <span className="h-1 w-1 shrink-0 rounded-full bg-white/20" />
+                  <span className="erp-bolinha" />
                   <span className="erp-rotulo">{item.rotulo}</span>
                 </Link>
               </li>
@@ -264,13 +262,6 @@ function tracos(nome: IconeNome | "documento" | "painel" | "chevron"): ReactNode
         <>
           <path d="M8 3h8l4 4v14H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
           <path d="M8 13h8M8 17h5" />
-        </>
-      );
-    case "consulta":
-      return (
-        <>
-          <circle cx="11" cy="11" r="6" />
-          <path d="m20 20-3.5-3.5" />
         </>
       );
     case "fluxo":

@@ -1,16 +1,18 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AvisoConsulta, Campo, CampoDinheiro, CampoDocumento, Pill, TituloPagina, dataBr, executar, mesAtual, reais, reaisInput, rotulo } from "@/components/erp/apresentacao";
+import { ListaFinanceira, filtroVisivelVazio, type FiltroVisivel, type LinhaLista } from "@/components/erp/lista-financeira";
 import { useAuth } from "@/lib/auth-context";
 import { cancelarConta, criarDespesa, encerrarRecorrencia, excluirContaPagar, excluirDespesa, gerarRecorrenciasAbertas, lancarRecorrencia, listarCentros, listarDespesas, pagarConta, salvarDespesa } from "@/services/erp/api";
 import type { DespesaItem } from "@/services/erp/api";
 import { toast } from "sonner";
-import { totaisDoMes, type CentroTipo } from "@/services/erp/domain";
+import { passaFiltro, type CriterioLista } from "@/services/erp/lista";
+import { reaisToCents, type CentroTipo } from "@/services/erp/domain";
 
 const vazio = {
   tipo: "operacional" as "operacional" | "financeira",
@@ -26,6 +28,18 @@ const vazio = {
   quantidadeMeses: "",
 };
 
+const STATUS_PAGAR = [
+  { valor: "a_pagar", rotulo: "A pagar" },
+  { valor: "paga", rotulo: "Paga" },
+  { valor: "cancelada", rotulo: "Cancelada" },
+];
+
+const RECORRENCIAS_PAGAR = [
+  { valor: "avulsa", rotulo: "Não recorrente" },
+  { valor: "com_prazo", rotulo: "Com prazo" },
+  { valor: "sem_prazo", rotulo: "Sem prazo" },
+];
+
 function textoRecorrencia(item: Pick<DespesaItem, "recorrenciaModo" | "recorrenciaStatus" | "parcela" | "quantidadeMeses">): string | null {
   if (!item.recorrenciaModo) return null;
   const encerrada = item.recorrenciaStatus === "encerrada" ? " · encerrada" : "";
@@ -33,41 +47,54 @@ function textoRecorrencia(item: Pick<DespesaItem, "recorrenciaModo" | "recorrenc
   return `Recorrente sem prazo${encerrada}`;
 }
 
+function recorrenciaDe(item: DespesaItem): string {
+  if (!item.recorrenciaId) return "avulsa";
+  return item.recorrenciaModo ?? "com_prazo";
+}
+
+function criterioDe(filtro: FiltroVisivel): CriterioLista {
+  return {
+    de: filtro.de,
+    ate: filtro.ate,
+    pessoa: filtro.pessoa,
+    status: filtro.status,
+    valorMin: limite(filtro.valorMin),
+    valorMax: limite(filtro.valorMax),
+    centro: filtro.centro,
+    recorrencia: filtro.recorrencia,
+    documento: "todos",
+  };
+}
+
+function limite(texto: string): number | null {
+  if (!texto.trim()) return null;
+  try {
+    return reaisToCents(texto);
+  } catch {
+    return null;
+  }
+}
+
 export function DespesasPage() {
   const { id } = useParams();
+  const caminho = useLocation().pathname;
+  const incluindo = caminho.endsWith("/novo");
+  const alterando = caminho.endsWith("/editar");
+  if (!id && !incluindo) return <ListaDespesas />;
+  if (id && !alterando) return <VerDespesa id={id} />;
+  return <FormularioDespesa id={alterando ? id : undefined} />;
+}
+
+function ListaDespesas() {
   const navigate = useNavigate();
   const { canEdit } = useAuth();
   const qc = useQueryClient();
-  const [mes, setMes] = useState(mesAtual);
-  const [form, setForm] = useState(vazio);
-  const [editando, setEditando] = useState<string | null>(null);
-  const [pagamento, setPagamento] = useState<Record<string, string>>({});
-  const centros = useQuery({ queryKey: ["erp", "centros"], queryFn: listarCentros });
   const despesas = useQuery({ queryKey: ["erp", "despesas"], queryFn: listarDespesas });
+  const centros = useQuery({ queryKey: ["erp", "centros"], queryFn: listarCentros });
+  const [filtro, setFiltro] = useState(filtroVisivelVazio);
   const geracao = useRef(false);
-
-  const disponiveis = (centros.data ?? []).filter((centro) => {
-    if (!centro.ativo) return false;
-    return form.tipo === "financeira" ? centro.tipo === "financeiro" : centro.tipo !== "financeiro";
-  });
-  const doMes = (despesas.data ?? []).filter((item) => item.competencia.slice(0, 7) === mes);
-  const totais = useMemo(
-    () =>
-      totaisDoMes(
-        (despesas.data ?? []).map((item) => ({
-          centroId: item.centroId,
-          centroNome: item.centroNome,
-          tipo: item.tipo,
-          valor: item.valor,
-          competencia: item.competencia,
-          cancelada: item.cancelada,
-        })),
-        mes,
-      ),
-    [despesas.data, mes],
-  );
-
   const recarregar = () => qc.invalidateQueries({ queryKey: ["erp"] });
+
   useEffect(() => {
     if (!canEdit || geracao.current) return;
     geracao.current = true;
@@ -82,31 +109,105 @@ export function DespesasPage() {
         toast.error(error instanceof Error ? error.message : "Não foi possível gerar a recorrência.");
       });
   }, [canEdit, qc]);
-  const centro = disponiveis.find((item) => item.id === form.centroId) ?? disponiveis[0];
-  const tituloAberto = id ? (despesas.data ?? []).find((item) => item.id === id) : undefined;
 
-  if (id) {
-    return (
-      <div className="space-y-6">
-        <TituloPagina titulo="Título a pagar" descricao="A exclusão apaga só esta conta. A despesa, os outros títulos e o favorecido permanecem." />
-        <AvisoConsulta erro={despesas.error} />
-        {!despesas.isLoading && !tituloAberto && <p className="text-sm text-muted-foreground">Título não encontrado.</p>}
-        {tituloAberto && (
-          <Card>
-            <CardContent className="space-y-3 py-4">
-              <div className="font-medium">{tituloAberto.descricao}</div>
-              <p className="text-sm text-muted-foreground">
-                {tituloAberto.favorecidoNome} · {reais(tituloAberto.valor)} · vence {dataBr(tituloAberto.vencimento)}
-              </p>
-              {textoRecorrencia(tituloAberto) && <p className="text-sm text-muted-foreground">{textoRecorrencia(tituloAberto)}</p>}
-              {tituloAberto.contaId ? <Pill valor={tituloAberto.contaStatus} /> : <p className="text-sm text-muted-foreground">Este lançamento não tem título a pagar.</p>}
-              {canEdit && tituloAberto.recorrenciaId && tituloAberto.recorrenciaStatus === "ativa" && (
+  const linhas = despesas.data ?? [];
+  const criterio = criterioDe(filtro);
+  const filtradas = linhas.filter((item) =>
+    passaFiltro(
+      {
+        pessoaId: item.favorecidoNome,
+        status: item.contaStatus,
+        vencimento: item.vencimento,
+        valor: item.valor,
+        centroId: item.centroId,
+        recorrencia: recorrenciaDe(item),
+        nota: false,
+        boleto: false,
+      },
+      criterio,
+    ),
+  );
+  const pessoas = [...new Set(linhas.map((item) => item.favorecidoNome).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")).map((nome) => ({ valor: nome, rotulo: nome }));
+  const centrosOpcoes = [...new Map((centros.data ?? []).map((centro) => [centro.id, centro.nome])).entries()].map(([valor, rotuloCentro]) => ({ valor, rotulo: rotuloCentro }));
+  const tabela: LinhaLista[] = filtradas.map((item) => ({
+    id: item.id,
+    pessoa: item.favorecidoNome,
+    descricao: item.descricao,
+    valor: item.valor,
+    vencimento: item.vencimento,
+    status: item.contaStatus,
+    detalhe: [item.centroNome, textoRecorrencia(item)].filter(Boolean).join(" · "),
+    podeExcluir: item.contaStatus !== "paga",
+    motivoBloqueio: "Conta paga não pode ser excluída.",
+  }));
+
+  return (
+    <ListaFinanceira
+      titulo="Contas a pagar"
+      descricao="A lista de todos os títulos a pagar. Incluir abre o lançamento e, ao gravar ou cancelar, volta para cá."
+      erro={despesas.error ?? centros.error}
+      carregando={despesas.isLoading}
+      canEdit={canEdit}
+      rotuloPessoa="Fornecedor"
+      pessoas={pessoas}
+      statusOpcoes={STATUS_PAGAR}
+      centros={centrosOpcoes}
+      recorrencias={RECORRENCIAS_PAGAR}
+      filtro={filtro}
+      onFiltro={setFiltro}
+      linhas={tabela}
+      onIncluir={() => navigate("/despesas/novo")}
+      onVer={(itemId) => navigate(`/despesas/${itemId}`)}
+      onAlterar={(itemId) => navigate(`/despesas/${itemId}/editar`)}
+      onExcluir={(itemId) => {
+        const item = linhas.find((linha) => linha.id === itemId);
+        if (!item) return;
+        void executar(() => excluirDespesa(item.id, item.contaStatus).then(recarregar), "Despesa excluída");
+      }}
+    />
+  );
+}
+
+function VerDespesa({ id }: { id: string }) {
+  const navigate = useNavigate();
+  const { canEdit } = useAuth();
+  const qc = useQueryClient();
+  const despesas = useQuery({ queryKey: ["erp", "despesas"], queryFn: listarDespesas });
+  const [pagamento, setPagamento] = useState("");
+  const item = (despesas.data ?? []).find((linha) => linha.id === id);
+  const recarregar = () => qc.invalidateQueries({ queryKey: ["erp"] });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <TituloPagina titulo="Título a pagar" descricao="A exclusão do título apaga só esta conta. A despesa, os outros títulos e o favorecido permanecem." />
+        <Button type="button" variant="outline" onClick={() => navigate("/despesas")}>Voltar para a lista</Button>
+      </div>
+      <AvisoConsulta erro={despesas.error} />
+      {!despesas.isLoading && !item && <p className="text-sm text-muted-foreground">Título não encontrado.</p>}
+      {item && (
+        <Card>
+          <CardContent className="space-y-3 py-4">
+            <div className="font-medium">{item.descricao}</div>
+            <p className="text-sm text-muted-foreground">
+              {item.favorecidoNome} · {item.centroNome} · {rotulo(item.categoria)} · {reais(item.valor)} · vence {dataBr(item.vencimento)}
+            </p>
+            <div className="flex gap-2">
+              <Pill valor={item.tipo} />
+              <Pill valor={item.contaStatus} />
+            </div>
+            {textoRecorrencia(item) && <p className="text-sm text-muted-foreground">{textoRecorrencia(item)}</p>}
+            {item.dataPagamento && <p className="text-xs text-muted-foreground">Pago em {dataBr(item.dataPagamento)}.</p>}
+            {!item.contaId && <p className="text-sm text-muted-foreground">Este lançamento não tem título a pagar.</p>}
+            <div className="flex flex-wrap gap-2">
+              {canEdit && <Button type="button" variant="outline" onClick={() => navigate(`/despesas/${item.id}/editar`)}>Alterar</Button>}
+              {canEdit && item.recorrenciaId && item.recorrenciaStatus === "ativa" && (
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() =>
                     executar(async () => {
-                      const mensagem = await encerrarRecorrencia(tituloAberto.recorrenciaId!);
+                      const mensagem = await encerrarRecorrencia(item.recorrenciaId!);
                       await recarregar();
                       return mensagem;
                     }, "Recorrência encerrada")
@@ -115,13 +216,13 @@ export function DespesasPage() {
                   Encerrar recorrência
                 </Button>
               )}
-              {canEdit && tituloAberto.contaId && (
+              {canEdit && item.contaId && (
                 <Button
                   type="button"
                   variant="ghost"
                   onClick={() =>
                     executar(async () => {
-                      await excluirContaPagar(tituloAberto.contaId!);
+                      await excluirContaPagar(item.contaId!);
                       await recarregar();
                       navigate("/despesas");
                     }, "Título excluído")
@@ -130,35 +231,94 @@ export function DespesasPage() {
                   Excluir título
                 </Button>
               )}
-            </CardContent>
-          </Card>
-        )}
-      </div>
-    );
-  }
+            </div>
+            {canEdit && item.contaStatus === "a_pagar" && item.contaId && (
+              <div className="flex flex-wrap items-end gap-2">
+                <Campo label="Data do pagamento">
+                  <Input type="date" value={pagamento} onChange={(event) => setPagamento(event.target.value)} />
+                </Campo>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    executar(async () => {
+                      await pagarConta(item.contaId!, item.contaStatus, pagamento);
+                      await recarregar();
+                    }, "Conta paga")
+                  }
+                >
+                  Pagar
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    executar(async () => {
+                      await cancelarConta(item.contaId!, item.contaStatus);
+                      await recarregar();
+                    }, "Conta cancelada")
+                  }
+                >
+                  Cancelar
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function FormularioDespesa({ id }: { id?: string }) {
+  const navigate = useNavigate();
+  const { canEdit } = useAuth();
+  const qc = useQueryClient();
+  const [mes, setMes] = useState(mesAtual);
+  const [form, setForm] = useState(vazio);
+  const [editando, setEditando] = useState<string | null>(id ?? null);
+  const centros = useQuery({ queryKey: ["erp", "centros"], queryFn: listarCentros });
+  const despesas = useQuery({ queryKey: ["erp", "despesas"], queryFn: listarDespesas });
+  const carregado = useRef<string | null>(null);
+  const recarregar = () => qc.invalidateQueries({ queryKey: ["erp"] });
+
+  useEffect(() => {
+    if (!id || !despesas.data || carregado.current === id) return;
+    const item = despesas.data.find((linha) => linha.id === id);
+    if (!item) return;
+    carregado.current = id;
+    setEditando(item.id);
+    setMes(item.competencia.slice(0, 7));
+    setForm({
+      tipo: item.tipo,
+      categoria: item.categoria,
+      descricao: item.descricao,
+      favorecidoNome: item.favorecidoNome,
+      favorecidoDocumento: item.favorecidoDocumento,
+      valor: reaisInput(item.valor),
+      vencimento: item.vencimento ?? "",
+      centroId: item.centroId,
+      modo: "avulsa",
+      diaVencimento: "",
+      quantidadeMeses: "",
+    });
+  }, [id, despesas.data]);
+
+  const disponiveis = (centros.data ?? []).filter((centro) => {
+    if (!centro.ativo) return false;
+    return form.tipo === "financeira" ? centro.tipo === "financeiro" : centro.tipo !== "financeiro";
+  });
+  const centro = disponiveis.find((item) => item.id === form.centroId) ?? disponiveis[0];
 
   return (
     <div className="space-y-6">
-      <TituloPagina
-        titulo="Contas a pagar"
-        descricao="Cada despesa abre uma conta a pagar. A recorrência com prazo projeta um título por mês. A sem prazo lança o mês atual e, no mês seguinte, gera o próximo até encerrar. Operacional cai em contrato ou indireto. Financeira cai só no centro financeiro e fica fora da margem."
-      />
-      <AvisoConsulta erro={centros.error ?? despesas.error} />
-      <Campo label="Competência">
-        <Input type="month" className="max-w-xs" value={mes} onChange={(e) => setMes(e.target.value)} />
-      </Campo>
-      <div className="grid gap-3 md:grid-cols-3">
-        {totais.length === 0 && <p className="text-sm text-muted-foreground">Nenhum total neste mês.</p>}
-        {totais.map((linha) => (
-          <Card key={`${linha.centroId}-${linha.tipo}`}>
-            <CardContent className="py-4">
-              <div className="text-sm text-muted-foreground">{linha.centroNome}</div>
-              <div className="font-medium">{rotulo(linha.tipo)}</div>
-              <div className="text-lg">{reais(linha.total)}</div>
-            </CardContent>
-          </Card>
-        ))}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <TituloPagina
+          titulo={editando ? "Alterar conta a pagar" : "Incluir conta a pagar"}
+          descricao="Cada despesa abre uma conta a pagar. A recorrência com prazo projeta um título por mês. A sem prazo lança o mês atual e, no mês seguinte, gera o próximo até encerrar."
+        />
+        <Button type="button" variant="outline" onClick={() => navigate("/despesas")}>Cancelar</Button>
       </div>
+      <AvisoConsulta erro={centros.error ?? despesas.error} />
+      {id && !despesas.isLoading && !despesas.data?.some((item) => item.id === id) && <p className="text-sm text-muted-foreground">Título não encontrado.</p>}
       {canEdit && (
         <Card>
           <CardContent className="py-4 grid gap-3 md:grid-cols-2">
@@ -196,6 +356,9 @@ export function DespesasPage() {
             </Campo>
             <Campo label="Valor">
               <CampoDinheiro value={form.valor} onChange={(valor) => setForm({ ...form, valor })} />
+            </Campo>
+            <Campo label="Competência">
+              <Input type="month" value={mes} onChange={(e) => setMes(e.target.value)} />
             </Campo>
             {!editando && (
               <Campo label="Recorrência">
@@ -248,11 +411,12 @@ export function DespesasPage() {
             {form.modo === "sem_prazo" && !editando && (
               <p className="text-sm text-muted-foreground md:col-span-2">Lança o título do mês atual. No mês seguinte, esta tela gera o próximo, até alguém encerrar. Não projeta os meses futuros.</p>
             )}
-            <div className="md:col-span-2">
+            <div className="md:col-span-2 flex gap-2">
               <Button
                 onClick={() =>
                   executar(async () => {
                     if (!centro) throw new Error("Cadastre o centro antes da despesa.");
+                    let mensagem: string | undefined;
                     if (editando || form.modo === "avulsa") {
                       const entrada = {
                         tipo: form.tipo,
@@ -268,143 +432,35 @@ export function DespesasPage() {
                       };
                       if (editando) await salvarDespesa(editando, entrada);
                       else await criarDespesa(entrada);
-                      setEditando(null);
-                      setForm(vazio);
-                      await recarregar();
-                      return;
+                    } else {
+                      mensagem = await lancarRecorrencia({
+                        modo: form.modo,
+                        tipo: form.tipo,
+                        categoria: form.categoria,
+                        descricao: form.descricao,
+                        favorecidoNome: form.favorecidoNome,
+                        favorecidoDocumento: form.favorecidoDocumento,
+                        valor: form.valor,
+                        diaVencimento: form.diaVencimento,
+                        primeiroVencimento: form.vencimento,
+                        quantidadeMeses: form.modo === "com_prazo" ? form.quantidadeMeses : "",
+                        centroId: centro.id,
+                        tipoCentro: centro.tipo as CentroTipo,
+                      });
                     }
-                    const mensagem = await lancarRecorrencia({
-                      modo: form.modo,
-                      tipo: form.tipo,
-                      categoria: form.categoria,
-                      descricao: form.descricao,
-                      favorecidoNome: form.favorecidoNome,
-                      favorecidoDocumento: form.favorecidoDocumento,
-                      valor: form.valor,
-                      diaVencimento: form.diaVencimento,
-                      primeiroVencimento: form.vencimento,
-                      quantidadeMeses: form.modo === "com_prazo" ? form.quantidadeMeses : "",
-                      centroId: centro.id,
-                      tipoCentro: centro.tipo as CentroTipo,
-                    });
-                    setForm(vazio);
                     await recarregar();
+                    navigate("/despesas");
                     return mensagem;
                   }, editando ? "Despesa atualizada" : form.modo === "avulsa" ? "Despesa e conta a pagar lançadas" : "Recorrência lançada")
                 }
               >
-                {editando ? "Salvar despesa" : form.modo === "avulsa" ? "Lançar despesa" : "Lançar recorrência"}
+                Gravar
               </Button>
-              {editando && (
-                <Button variant="ghost" className="ml-2" onClick={() => { setEditando(null); setForm(vazio); }}>Cancelar edição</Button>
-              )}
+              <Button type="button" variant="ghost" onClick={() => navigate("/despesas")}>Cancelar</Button>
             </div>
           </CardContent>
         </Card>
       )}
-      <div className="grid gap-3">
-        {doMes.map((item) => (
-          <Card key={item.id}>
-            <CardContent className="py-4 space-y-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="font-medium">{item.descricao}</div>
-                  <div className="text-sm text-muted-foreground">
-                    {item.favorecidoNome} · {item.centroNome} · {rotulo(item.categoria)} · vence {dataBr(item.vencimento)}
-                  </div>
-                  {textoRecorrencia(item) && <div className="text-sm text-muted-foreground">{textoRecorrencia(item)}</div>}
-                </div>
-                <div className="text-right">
-                  <div className="font-medium">{reais(item.valor)}</div>
-                  <div className="mt-1 flex justify-end gap-2">
-                    <Pill valor={item.tipo} />
-                    <Pill valor={item.contaStatus} />
-                  </div>
-                </div>
-              </div>
-              {canEdit && (
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => navigate(`/despesas/${item.id}`)}>Abrir título</Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setEditando(item.id);
-                      setMes(item.competencia.slice(0, 7));
-                      setForm({
-                        tipo: item.tipo,
-                        categoria: item.categoria,
-                        descricao: item.descricao,
-                        favorecidoNome: item.favorecidoNome,
-                        favorecidoDocumento: item.favorecidoDocumento,
-                        valor: reaisInput(item.valor),
-                        vencimento: item.vencimento ?? "",
-                        centroId: item.centroId,
-                        modo: "avulsa",
-                        diaVencimento: "",
-                        quantidadeMeses: "",
-                      });
-                    }}
-                  >
-                    Editar
-                  </Button>
-                  {item.contaStatus !== "paga" && (
-                    <Button variant="ghost" onClick={() => executar(() => excluirDespesa(item.id, item.contaStatus).then(recarregar), "Despesa excluída")}>Excluir</Button>
-                  )}
-                  {item.recorrenciaId && item.recorrenciaStatus === "ativa" && (
-                    <Button
-                      variant="ghost"
-                      onClick={() =>
-                        executar(async () => {
-                          const mensagem = await encerrarRecorrencia(item.recorrenciaId!);
-                          await recarregar();
-                          return mensagem;
-                        }, "Recorrência encerrada")
-                      }
-                    >
-                      Encerrar recorrência
-                    </Button>
-                  )}
-                </div>
-              )}
-              {canEdit && item.contaStatus === "a_pagar" && item.contaId && (
-                <div className="flex flex-wrap items-end gap-2">
-                  <Campo label="Data do pagamento">
-                    <Input
-                      type="date"
-                      value={pagamento[item.contaId] ?? ""}
-                      onChange={(e) => setPagamento({ ...pagamento, [item.contaId!]: e.target.value })}
-                    />
-                  </Campo>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      executar(async () => {
-                        await pagarConta(item.contaId!, item.contaStatus, pagamento[item.contaId!] ?? "");
-                        await recarregar();
-                      }, "Conta paga")
-                    }
-                  >
-                    Pagar
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() =>
-                      executar(async () => {
-                        await cancelarConta(item.contaId!, item.contaStatus);
-                        await recarregar();
-                      }, "Conta cancelada")
-                    }
-                  >
-                    Cancelar
-                  </Button>
-                </div>
-              )}
-              {item.dataPagamento && <p className="text-xs text-muted-foreground">Pago em {dataBr(item.dataPagamento)}.</p>}
-            </CardContent>
-          </Card>
-        ))}
-        {doMes.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma despesa nesta competência.</p>}
-      </div>
     </div>
   );
 }

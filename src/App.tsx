@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { supabase, supabaseConfigurado } from "@/integrations/supabase/client";
@@ -14,7 +14,6 @@ import { PropostaPage } from "@/routes/proposta";
 import { ContratosPage } from "@/routes/contratos";
 import { ContratoPage } from "@/routes/contrato";
 import { ContasPage } from "@/routes/contas";
-import { ConsultaPage } from "@/routes/consulta";
 import { AssinarPage } from "@/routes/assinar";
 import { FluxoPage } from "@/routes/fluxo";
 import { MargemPage } from "@/routes/margem";
@@ -115,6 +114,8 @@ function Rotas() {
       <Route path="/clientes" element={<ClientesPage />} />
       <Route path="/centros" element={<CentrosPage />} />
       <Route path="/despesas" element={<DespesasPage />} />
+      <Route path="/despesas/novo" element={<DespesasPage />} />
+      <Route path="/despesas/:id/editar" element={<DespesasPage />} />
       <Route path="/despesas/:id" element={<DespesasPage />} />
       <Route path="/pessoal" element={<PessoalPage />} />
       <Route path="/propostas" element={<PropostasPage />} />
@@ -122,7 +123,9 @@ function Rotas() {
       <Route path="/contratos" element={<ContratosPage />} />
       <Route path="/contratos/:id" element={<ContratoPage />} />
       <Route path="/contas" element={<ContasPage />} />
-      <Route path="/contas/consulta" element={<ConsultaPage />} />
+      <Route path="/contas/consulta" element={<Navigate to="/contas" replace />} />
+      <Route path="/contas/novo" element={<ContasPage />} />
+      <Route path="/contas/:id/editar" element={<ContasPage />} />
       <Route path="/contas/:id" element={<ContasPage />} />
       <Route path="/fluxo" element={<FluxoPage />} />
       <Route path="/margem" element={<MargemPage />} />
