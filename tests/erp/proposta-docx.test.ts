@@ -42,34 +42,40 @@ function dados(extra: Partial<DadosPropostaDocx> = {}): DadosPropostaDocx {
 }
 
 describe("responsabilidades no documento da proposta", () => {
-  it("coloca cliente e AHR depois do conteúdo e antes do fecho", () => {
+  it("coloca cliente e AHR na seção de responsabilidades, antes do planejamento", () => {
     const xml = documentoDe(
       preencherModelo(
         readFileSync(MODELO),
         dados({
+          responsabilidades: "<p>Texto antigo que não deve sair.</p>",
           responsabilidadeCliente: "<p>Entregar os documentos.</p>",
           responsabilidadeAhr: "<p>Executar o serviço.</p>",
         }),
       ),
     );
-    const validade = xml.lastIndexOf("Validade da proposta");
+    const secao = xml.lastIndexOf("Definição de responsabilidades");
     const cliente = xml.indexOf("Responsabilidade do cliente");
     const ahr = xml.indexOf("Responsabilidade da AHR Brasil");
-    const fecho = xml.indexOf("Atenciosamente,");
-    assert.ok(validade >= 0 && cliente > validade && ahr > cliente && fecho > ahr);
-    assert.ok(xml.indexOf("Panorama do trabalho.") < cliente);
+    const planejamento = xml.lastIndexOf("Planejamento de Trabalho");
+    const validade = xml.lastIndexOf("Validade da proposta");
+    assert.ok(secao >= 0 && cliente > secao && ahr > cliente && planejamento > ahr && validade > planejamento);
     assert.ok(xml.indexOf("Entregar os documentos.") > cliente && xml.indexOf("Entregar os documentos.") < ahr);
-    assert.ok(xml.indexOf("Executar o serviço.") > ahr && xml.indexOf("Executar o serviço.") < fecho);
-    assert.equal(xml.includes("O que fica a cargo"), false);
+    assert.ok(xml.indexOf("Executar o serviço.") > ahr && xml.indexOf("Executar o serviço.") < planejamento);
+    assert.equal(xml.includes("Texto antigo que não deve sair."), false);
   });
 
-  it("mantém os títulos quando os campos estão vazios", () => {
-    const xml = documentoDe(preencherModelo(readFileSync(MODELO), dados()));
-    const cliente = xml.indexOf("Responsabilidade do cliente");
-    const ahr = xml.indexOf("Responsabilidade da AHR Brasil");
-    const fecho = xml.indexOf("Atenciosamente,");
-    assert.ok(cliente >= 0 && ahr > cliente && fecho > ahr);
-    assert.equal(xml.includes("Entregar os documentos."), false);
-    assert.equal(xml.includes("Executar o serviço."), false);
+  it("mantém os títulos vazios e o texto antigo só enquanto os dois campos estão em branco", () => {
+    const vazio = documentoDe(preencherModelo(readFileSync(MODELO), dados()));
+    const cliente = vazio.indexOf("Responsabilidade do cliente");
+    const ahr = vazio.indexOf("Responsabilidade da AHR Brasil");
+    const planejamento = vazio.lastIndexOf("Planejamento de Trabalho");
+    assert.ok(cliente >= 0 && ahr > cliente && planejamento > ahr);
+    const antigo = documentoDe(
+      preencherModelo(readFileSync(MODELO), dados({ responsabilidades: "<p>Texto antigo das duas partes.</p>" })),
+    );
+    const tituloAntigo = antigo.indexOf("Responsabilidade do cliente");
+    const textoAntigo = antigo.indexOf("Texto antigo das duas partes.");
+    assert.ok(textoAntigo >= 0 && textoAntigo < tituloAntigo);
+    assert.ok(tituloAntigo < antigo.lastIndexOf("Planejamento de Trabalho"));
   });
 });

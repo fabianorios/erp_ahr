@@ -652,6 +652,22 @@ function textoProposta(valor: string | null | undefined): string {
   return (valor ?? "").trim();
 }
 
+export function htmlTemTexto(valor: string | null | undefined): boolean {
+  const texto = (valor ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'");
+  return texto.replace(/\s+/g, " ").trim() !== "";
+}
+
+export function mostrarResponsabilidadesAntigas(antigo: string, cliente: string, ahr: string): boolean {
+  return htmlTemTexto(antigo) && !htmlTemTexto(cliente) && !htmlTemTexto(ahr);
+}
+
 export function normalizarValidade(valor: string | null | undefined): string {
   const texto = textoProposta(valor);
   if (!texto) return "";

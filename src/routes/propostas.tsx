@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AvisoConsulta, Campo, Pill, TituloPagina, executar, reais } from "@/components/erp/apresentacao";
 import { FormaPagamentoCampos } from "@/components/erp/forma-pagamento";
-import { ResponsabilidadesPartesCampos, TextosPropostaCampos } from "@/components/erp/proposta-textos";
+import { TextosPropostaCampos } from "@/components/erp/proposta-textos";
 import { useAuth } from "@/lib/auth-context";
 import { criarProposta, formularioPropostaVazio, listarClientesFinanceiros, listarPropostas } from "@/services/erp/api";
 
@@ -55,7 +55,6 @@ export function PropostasPage() {
               value={form}
               onChange={(agenda) => setForm({ ...form, ...agenda })}
             />
-            <ResponsabilidadesPartesCampos value={form} onChange={(textos) => setForm({ ...form, ...textos })} />
             <p className="text-xs text-muted-foreground">Forma de cobrança: mista. O cliente precisa de CPF ou CNPJ.</p>
             <Button
               className="w-fit"

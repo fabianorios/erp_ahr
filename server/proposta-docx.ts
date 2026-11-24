@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DomainError, validadeNoDocumento } from "../src/services/erp/domain.ts";
+import { DomainError, mostrarResponsabilidadesAntigas, validadeNoDocumento } from "../src/services/erp/domain.ts";
 
 export type DadosPropostaDocx = {
   titulo: string;
@@ -362,17 +362,14 @@ function desenhoXml(rel: string, id: number, nome: string, cx: number, cy: numbe
 
 function tituloSecao(titulo: string): string {
   const seguro = xml(titulo);
-  return `<w:p><w:pPr><w:pStyle w:val="Ttulo1"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr><w:tabs><w:tab w:val="num" w:pos="360"/></w:tabs><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="both"/><w:rPr><w:i/><w:color w:val="4472C4"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:pPr><w:r><w:rPr><w:i/><w:color w:val="4472C4"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr><w:t>${seguro}</w:t></w:r></w:p>`;
+  return `<w:p><w:pPr><w:pStyle w:val="Ttulo3"/><w:numPr><w:ilvl w:val="1"/><w:numId w:val="3"/></w:numPr><w:tabs><w:tab w:val="num" w:pos="360"/></w:tabs><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="both"/><w:rPr><w:i/><w:color w:val="4472C4"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:pPr><w:r><w:rPr><w:i/><w:color w:val="4472C4"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr><w:t>${seguro}</w:t></w:r></w:p>`;
 }
 
-function inserirAntesDoTexto(documento: string, texto: string, bloco: string): string {
-  if (!bloco) return documento;
-  const agulha = `<w:t>${texto}</w:t>`;
-  const em = documento.indexOf(agulha);
-  if (em < 0) throw new Error(`Trecho não encontrado no modelo: ${texto}`);
-  const inicio = Math.max(documento.lastIndexOf("<w:p ", em), documento.lastIndexOf("<w:p>", em));
-  if (inicio < 0) throw new Error(`Parágrafo sem início no modelo: ${texto}`);
-  return documento.slice(0, inicio) + bloco + documento.slice(inicio);
+function xmlDeHtml(html: string, proximo: { id: number; desenho: number }, imagens: Pacote["imagens"], links: Pacote["links"]): string {
+  const pacote = blocoParaXml(htmlParaBlocos(html), proximo);
+  imagens.push(...pacote.imagens);
+  links.push(...pacote.links);
+  return pacote.xml;
 }
 
 function inserirAposTitulo(documento: string, titulo: string, bloco: string): string {
@@ -451,7 +448,6 @@ export function preencherModelo(modelo: Buffer, dados: DadosPropostaDocx): Buffe
     const secoes: Array<[string, string]> = [
       ["Visão geral", dados.visaoGeral],
       ["Definição de Escopo", dados.escopo],
-      ["Definição de responsabilidades", dados.responsabilidades],
       ["Planejamento de Trabalho", dados.prazo],
       ["Execução das atividades", dados.execucao],
       ["Validade da proposta", htmlValidade(dados.validade)],
@@ -459,26 +455,21 @@ export function preencherModelo(modelo: Buffer, dados: DadosPropostaDocx): Buffe
     const imagens: Pacote["imagens"] = [];
     const links: Pacote["links"] = [];
     for (const [titulo, html] of secoes) {
-      const pacote = blocoParaXml(htmlParaBlocos(html), proximo);
-      imagens.push(...pacote.imagens);
-      links.push(...pacote.links);
-      documento = inserirAposTitulo(documento, titulo, pacote.xml);
+      documento = inserirAposTitulo(documento, titulo, xmlDeHtml(html, proximo, imagens, links));
     }
-    const valores = htmlParaBlocos(`<p>Valor total: ${xmlTexto(dados.valorTotal)}</p>${dados.formaPagamento}`);
-    const pacoteValores = blocoParaXml(valores, proximo);
-    imagens.push(...pacoteValores.imagens);
-    links.push(...pacoteValores.links);
-    documento = inserirAposTitulo(documento, "Valores", pacoteValores.xml);
-    const partes: Array<[string, string]> = [
+    const responsabilidades: string[] = [];
+    if (mostrarResponsabilidadesAntigas(dados.responsabilidades, dados.responsabilidadeCliente, dados.responsabilidadeAhr)) {
+      responsabilidades.push(xmlDeHtml(dados.responsabilidades, proximo, imagens, links));
+    }
+    for (const [titulo, html] of [
       ["Responsabilidade do cliente", dados.responsabilidadeCliente],
       ["Responsabilidade da AHR Brasil", dados.responsabilidadeAhr],
-    ];
-    for (const [titulo, html] of partes) {
-      const pacote = blocoParaXml(htmlParaBlocos(html), proximo);
-      imagens.push(...pacote.imagens);
-      links.push(...pacote.links);
-      documento = inserirAntesDoTexto(documento, "Atenciosamente,", tituloSecao(titulo) + pacote.xml);
+    ] as const) {
+      responsabilidades.push(tituloSecao(titulo) + xmlDeHtml(html, proximo, imagens, links));
     }
+    documento = inserirAposTitulo(documento, "Definição de responsabilidades", responsabilidades.join(""));
+    const valores = `<p>Valor total: ${xmlTexto(dados.valorTotal)}</p>${dados.formaPagamento}`;
+    documento = inserirAposTitulo(documento, "Valores", xmlDeHtml(valores, proximo, imagens, links));
     if (!rels.includes("</Relationships>")) throw new Error("Relações do modelo inválidas.");
     const relLinks = links.map((link) => `<Relationship Id="${link.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xml(link.href)}" TargetMode="External"/>`);
     const relMidia = imagens.map((imagem) => `<Relationship Id="${imagem.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${imagem.nome}"/>`);

@@ -40,6 +40,7 @@ import {
   podeCancelarTitulo,
   podeExcluirTitulo,
   htmlAdicionais,
+  mostrarResponsabilidadesAntigas,
   normalizarValidade,
   validarAdicionais,
   proximoNumero,
@@ -434,6 +435,10 @@ describe("proposta, contrato e título", () => {
     });
     assert.equal(salva.responsabilidadeCliente, "");
     assert.equal(salva.responsabilidadeAhr, "");
+    assert.equal(mostrarResponsabilidadesAntigas("<p>Texto antigo</p>", "", ""), true);
+    assert.equal(mostrarResponsabilidadesAntigas("<p><br></p>", "", ""), false);
+    assert.equal(mostrarResponsabilidadesAntigas("<p>Texto antigo</p>", "<p>Cliente</p>", ""), false);
+    assert.equal(mostrarResponsabilidadesAntigas("", "", ""), false);
   });
 
   it("leva ao PDF só transporte e refeição cobrados", () => {

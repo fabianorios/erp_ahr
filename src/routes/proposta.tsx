@@ -10,7 +10,7 @@ import { AvisoConsulta, Campo, Pill, TituloPagina, dataBr, executar, reaisInput 
 import { FormaPagamentoCampos } from "@/components/erp/forma-pagamento";
 import { ContasDaProposta } from "@/components/erp/contas-previstas";
 import { PainelAssinatura } from "@/components/erp/painel-assinatura";
-import { ResponsabilidadesPartesCampos, TextosPropostaCampos } from "@/components/erp/proposta-textos";
+import { TextosPropostaCampos } from "@/components/erp/proposta-textos";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -117,11 +117,6 @@ export function PropostaPage() {
             disabled={!rascunho || !canEdit}
             value={form}
             onChange={(agenda) => setForm({ ...form, ...agenda })}
-          />
-          <ResponsabilidadesPartesCampos
-            value={form}
-            disabled={!rascunho || !canEdit}
-            onChange={(textos) => setForm({ ...form, ...textos })}
           />
           <p className="text-xs text-muted-foreground">
             {atual.enviadaEm ? `Enviada em ${dataBr(atual.enviadaEm.slice(0, 10))}. ` : ""}
