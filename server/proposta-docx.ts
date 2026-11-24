@@ -13,6 +13,8 @@ export type DadosPropostaDocx = {
   prazo: string;
   execucao: string;
   validade: string;
+  responsabilidadeCliente: string;
+  responsabilidadeAhr: string;
   formaPagamento: string;
   valorTotal: string;
   dataExtenso: string;
@@ -358,6 +360,21 @@ function desenhoXml(rel: string, id: number, nome: string, cx: number, cy: numbe
   return `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${id}" name="${xml(nome)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="${xml(nome)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rel}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
 }
 
+function tituloSecao(titulo: string): string {
+  const seguro = xml(titulo);
+  return `<w:p><w:pPr><w:pStyle w:val="Ttulo1"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr><w:tabs><w:tab w:val="num" w:pos="360"/></w:tabs><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="both"/><w:rPr><w:i/><w:color w:val="4472C4"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:pPr><w:r><w:rPr><w:i/><w:color w:val="4472C4"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr><w:t>${seguro}</w:t></w:r></w:p>`;
+}
+
+function inserirAntesDoTexto(documento: string, texto: string, bloco: string): string {
+  if (!bloco) return documento;
+  const agulha = `<w:t>${texto}</w:t>`;
+  const em = documento.indexOf(agulha);
+  if (em < 0) throw new Error(`Trecho não encontrado no modelo: ${texto}`);
+  const inicio = Math.max(documento.lastIndexOf("<w:p ", em), documento.lastIndexOf("<w:p>", em));
+  if (inicio < 0) throw new Error(`Parágrafo sem início no modelo: ${texto}`);
+  return documento.slice(0, inicio) + bloco + documento.slice(inicio);
+}
+
 function inserirAposTitulo(documento: string, titulo: string, bloco: string): string {
   if (!bloco) return documento;
   const agulha = `<w:t>${titulo}</w:t>`;
@@ -452,6 +469,16 @@ export function preencherModelo(modelo: Buffer, dados: DadosPropostaDocx): Buffe
     imagens.push(...pacoteValores.imagens);
     links.push(...pacoteValores.links);
     documento = inserirAposTitulo(documento, "Valores", pacoteValores.xml);
+    const partes: Array<[string, string]> = [
+      ["Responsabilidade do cliente", dados.responsabilidadeCliente],
+      ["Responsabilidade da AHR Brasil", dados.responsabilidadeAhr],
+    ];
+    for (const [titulo, html] of partes) {
+      const pacote = blocoParaXml(htmlParaBlocos(html), proximo);
+      imagens.push(...pacote.imagens);
+      links.push(...pacote.links);
+      documento = inserirAntesDoTexto(documento, "Atenciosamente,", tituloSecao(titulo) + pacote.xml);
+    }
     if (!rels.includes("</Relationships>")) throw new Error("Relações do modelo inválidas.");
     const relLinks = links.map((link) => `<Relationship Id="${link.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xml(link.href)}" TargetMode="External"/>`);
     const relMidia = imagens.map((imagem) => `<Relationship Id="${imagem.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${imagem.nome}"/>`);

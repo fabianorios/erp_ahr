@@ -85,6 +85,9 @@ export function mensagemDb(message: string): string {
 
 function falha(error: { message: string } | null): void {
   if (!error) return;
+  if (/schema cache|column|could not find|does not exist/i.test(error.message) && /responsabilidade_cliente|responsabilidade_ahr/.test(error.message)) {
+    throw new DomainError("Falta atualizar a tabela de propostas. Rode sql/proposta-responsabilidades.sql no SQL Editor do projeto do ERP.");
+  }
   if (/schema cache|column/i.test(error.message) && /responsabilidades|forma_pagamento|agenda_pagamento|\bprazo\b/.test(error.message)) {
     throw new DomainError("As seções da proposta ainda não existem no banco deste ERP.");
   }
@@ -542,6 +545,8 @@ export type PropostaItem = {
   prazo: string;
   execucao: string;
   validade: string;
+  responsabilidadeCliente: string;
+  responsabilidadeAhr: string;
   formaPagamento: string;
   adicionais: ValoresAdicionaisForm;
   agenda: AgendaPagamento | null;
@@ -570,6 +575,8 @@ function mapProposta(row: any): PropostaItem {
     prazo: row.prazo ?? "",
     execucao: row.execucao ?? "",
     validade: validadeNoFormulario(row.validade),
+    responsabilidadeCliente: row.responsabilidade_cliente ?? "",
+    responsabilidadeAhr: row.responsabilidade_ahr ?? "",
     formaPagamento: row.forma_pagamento ?? "",
     adicionais: adicionaisNoFormulario(adicionaisDeJson(row.valores_adicionais)),
     agenda: agendaDeJson(row.agenda_pagamento),
@@ -617,6 +624,8 @@ export function formularioPropostaVazio(): PropostaFormulario {
     prazo: "",
     execucao: "",
     validade: "",
+    responsabilidadeCliente: "",
+    responsabilidadeAhr: "",
     formaPagamento: "",
     valor: "",
     inicio: "",

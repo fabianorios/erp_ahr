@@ -54,3 +54,34 @@ export function TextosPropostaCampos({
     </>
   );
 }
+
+const PARTES = [
+  ["responsabilidadeCliente", "Responsabilidade do cliente", "O que fica a cargo do cliente. Pode ficar em branco."],
+  ["responsabilidadeAhr", "Responsabilidade da AHR Brasil", "O que fica a cargo da AHR Brasil. Pode ficar em branco."],
+] as const;
+
+export function ResponsabilidadesPartesCampos({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: TextosProposta;
+  onChange: (value: TextosProposta) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <>
+      {PARTES.map(([chave, rotulo, ajuda]) => (
+        <Campo key={chave} label={rotulo}>
+          <RichTextEditor
+            value={value[chave]}
+            disabled={disabled}
+            placeholder={rotulo}
+            onChange={(html) => onChange({ ...value, [chave]: html })}
+          />
+          <p className="text-xs text-muted-foreground">{ajuda}</p>
+        </Campo>
+      ))}
+    </>
+  );
+}

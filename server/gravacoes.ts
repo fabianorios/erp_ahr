@@ -65,6 +65,9 @@ function falhar(error: { message: string; code?: string } | null): void {
     throw new DomainError("Este registro está em uso e não pode ser excluído.");
   }
   if (error.code === "23505") throw new DomainError("Este registro já existe.");
+  if (/responsabilidade_cliente|responsabilidade_ahr/.test(texto) && /schema cache|could not find|does not exist|42703|PGRST204/i.test(texto)) {
+    throw new DomainError("Falta atualizar a tabela de propostas. Rode sql/proposta-responsabilidades.sql no SQL Editor do projeto do ERP.");
+  }
   if (/schema cache/i.test(texto) && /titulo|visao_geral|execucao|validade|valores_adicionais/.test(texto)) {
     throw new DomainError("Falta atualizar a tabela de propostas. Rode o SQL de valores da proposta.");
   }
@@ -913,6 +916,8 @@ function formularioProposta(dados: Record<string, unknown>) {
     prazo: texto(dados, "prazo"),
     execucao: texto(dados, "execucao"),
     validade: texto(dados, "validade"),
+    responsabilidadeCliente: texto(dados, "responsabilidadeCliente"),
+    responsabilidadeAhr: texto(dados, "responsabilidadeAhr"),
     formaPagamento: texto(dados, "formaPagamento"),
     valor: texto(dados, "valor"),
     inicio: texto(dados, "inicio"),
@@ -944,6 +949,8 @@ async function criarProposta(db: Banco, dados: Record<string, unknown>): Promise
       prazo: proposta.prazo,
       execucao: proposta.execucao,
       validade: proposta.validade,
+      responsabilidade_cliente: proposta.responsabilidadeCliente,
+      responsabilidade_ahr: proposta.responsabilidadeAhr,
       forma_pagamento: proposta.formaPagamento,
       agenda_pagamento: agendaParaJson(proposta.agenda),
       valores_adicionais: adicionaisParaJson(proposta.adicionais),
@@ -976,6 +983,8 @@ async function salvarProposta(db: Banco, dados: Record<string, unknown>): Promis
       prazo: proposta.prazo,
       execucao: proposta.execucao,
       validade: proposta.validade,
+      responsabilidade_cliente: proposta.responsabilidadeCliente,
+      responsabilidade_ahr: proposta.responsabilidadeAhr,
       forma_pagamento: proposta.formaPagamento,
       agenda_pagamento: agendaParaJson(proposta.agenda),
       valores_adicionais: adicionaisParaJson(proposta.adicionais),

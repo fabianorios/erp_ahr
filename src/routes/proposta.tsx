@@ -10,7 +10,7 @@ import { AvisoConsulta, Campo, Pill, TituloPagina, dataBr, executar, reaisInput 
 import { FormaPagamentoCampos } from "@/components/erp/forma-pagamento";
 import { ContasDaProposta } from "@/components/erp/contas-previstas";
 import { PainelAssinatura } from "@/components/erp/painel-assinatura";
-import { TextosPropostaCampos } from "@/components/erp/proposta-textos";
+import { ResponsabilidadesPartesCampos, TextosPropostaCampos } from "@/components/erp/proposta-textos";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -47,6 +47,8 @@ export function PropostaPage() {
       prazo: atual.prazo,
       execucao: atual.execucao,
       validade: atual.validade,
+      responsabilidadeCliente: atual.responsabilidadeCliente,
+      responsabilidadeAhr: atual.responsabilidadeAhr,
       formaPagamento: atual.formaPagamento,
       quantidade: atual.agenda ? String(atual.agenda.quantidade) : "",
       modoParcelas: atual.agenda?.modo ?? "datas",
@@ -58,7 +60,7 @@ export function PropostaPage() {
       inicio: atual.inicio ?? "",
       fim: atual.fim ?? "",
     });
-  }, [atual?.id, atual?.status, atual?.valor, atual?.titulo, atual?.visaoGeral, atual?.escopo, atual?.responsabilidades, atual?.prazo, atual?.execucao, atual?.validade, atual?.formaPagamento, atual?.adicionais, atual?.clienteId, atual?.inicio, atual?.fim, atual?.agenda]);
+  }, [atual?.id, atual?.status, atual?.valor, atual?.titulo, atual?.visaoGeral, atual?.escopo, atual?.responsabilidades, atual?.prazo, atual?.execucao, atual?.validade, atual?.responsabilidadeCliente, atual?.responsabilidadeAhr, atual?.formaPagamento, atual?.adicionais, atual?.clienteId, atual?.inicio, atual?.fim, atual?.agenda]);
 
   const recarregar = async () => {
     await qc.invalidateQueries({ queryKey: ["erp"] });
@@ -115,6 +117,11 @@ export function PropostaPage() {
             disabled={!rascunho || !canEdit}
             value={form}
             onChange={(agenda) => setForm({ ...form, ...agenda })}
+          />
+          <ResponsabilidadesPartesCampos
+            value={form}
+            disabled={!rascunho || !canEdit}
+            onChange={(textos) => setForm({ ...form, ...textos })}
           />
           <p className="text-xs text-muted-foreground">
             {atual.enviadaEm ? `Enviada em ${dataBr(atual.enviadaEm.slice(0, 10))}. ` : ""}

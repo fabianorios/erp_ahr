@@ -397,6 +397,8 @@ describe("proposta, contrato e título", () => {
           prazo: "",
           execucao: "",
           validade: "",
+          responsabilidadeCliente: "",
+          responsabilidadeAhr: "",
           formaPagamento: "",
           valor: "100,00",
           inicio: "",
@@ -409,6 +411,29 @@ describe("proposta, contrato e título", () => {
         }),
       /título da proposta/,
     );
+    const salva = validarProposta({
+      clienteId: "cli",
+      titulo: "DIRF",
+      visaoGeral: "",
+      escopo: "",
+      responsabilidades: "",
+      prazo: "",
+      execucao: "",
+      validade: "",
+      responsabilidadeCliente: "  ",
+      responsabilidadeAhr: "",
+      formaPagamento: "",
+      valor: "100,00",
+      inicio: "",
+      fim: "",
+      quantidade: "1",
+      modoParcelas: "datas",
+      intervaloDias: "",
+      primeiroVencimento: "",
+      vencimentos: ["2026-12-31"],
+    });
+    assert.equal(salva.responsabilidadeCliente, "");
+    assert.equal(salva.responsabilidadeAhr, "");
   });
 
   it("leva ao PDF só transporte e refeição cobrados", () => {

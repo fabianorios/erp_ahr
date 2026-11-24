@@ -643,6 +643,8 @@ export type TextosProposta = {
   prazo: string;
   execucao: string;
   validade: string;
+  responsabilidadeCliente: string;
+  responsabilidadeAhr: string;
   formaPagamento: string;
 };
 
@@ -1004,6 +1006,8 @@ export function validarProposta(input: {
   prazo: string;
   execucao: string;
   validade: string;
+  responsabilidadeCliente: string;
+  responsabilidadeAhr: string;
   formaPagamento: string;
   valor: string;
   inicio: string;
@@ -1043,6 +1047,8 @@ export function validarProposta(input: {
     prazo: textoProposta(input.prazo),
     execucao: textoProposta(input.execucao),
     validade: normalizarValidade(input.validade),
+    responsabilidadeCliente: textoProposta(input.responsabilidadeCliente),
+    responsabilidadeAhr: textoProposta(input.responsabilidadeAhr),
     formaPagamento: textoProposta(input.formaPagamento),
     adicionais: validarAdicionais(input.adicionais),
     valor,

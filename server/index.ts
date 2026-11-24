@@ -129,6 +129,8 @@ async function pdfDaProposta(id: string): Promise<{ status: number; message?: st
     prazo: String(data.prazo ?? ""),
     execucao: typeof data.execucao === "string" ? data.execucao : "",
     validade: typeof data.validade === "string" ? data.validade : "",
+    responsabilidadeCliente: typeof data.responsabilidade_cliente === "string" ? data.responsabilidade_cliente : "",
+    responsabilidadeAhr: typeof data.responsabilidade_ahr === "string" ? data.responsabilidade_ahr : "",
     formaPagamento: `${agenda ? htmlAgenda(agenda) : ""}${adicionais}${nota}`,
     valorTotal: valor,
     dataExtenso: dataPropostaExtenso(),
