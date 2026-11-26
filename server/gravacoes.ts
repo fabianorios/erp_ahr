@@ -53,9 +53,9 @@ import {
   type ModoParcelas,
   type PropostaStatus,
 } from "../src/services/erp/domain.ts";
-import { emailClienteParaRevisao, validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
+import { emailsClienteParaRevisao, validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
 import { alterarVencimentoDoTitulo, cancelarBoletoDoTitulo, emitirBoletoDoTitulo, enviarBoletoDoTitulo, enviarKitDoTitulo, situacaoKit } from "./boleto-cora.ts";
-import { enviarEmail } from "./email.ts";
+import { COPIA_EMAIL_CLIENTE, enviarEmail } from "./email.ts";
 import { gerarPdfDaProposta } from "./proposta-pdf.ts";
 import { cancelarNfseDoTitulo, emitirNfseECriarTitulo, gravarPdfDaNota } from "./nfse-nacional.ts";
 
@@ -1033,13 +1033,13 @@ async function mudarProposta(db: Banco, dados: Record<string, unknown>): Promise
   return { id };
 }
 
-async function emailParaRevisaoDoCliente(db: Banco, clienteId: string): Promise<string> {
+async function emailsParaRevisaoDoCliente(db: Banco, clienteId: string): Promise<string[]> {
   const { data: cliente, error: erroCliente } = await db.from("clients").select("email").eq("id", clienteId).maybeSingle();
   falhar(erroCliente);
   const contatos = await db.from("erp_cliente_contatos").select("email").eq("cliente_id", clienteId).order("nome");
   if (contatos.error && !contatosAusentes(contatos.error)) falhar(contatos.error);
   const gestao = await db.from("client_contacts").select("email").eq("client_id", clienteId).eq("is_active", true).order("name");
-  return emailClienteParaRevisao([
+  return emailsClienteParaRevisao([
     cliente?.email,
     ...(contatos.data ?? []).map((contato) => contato.email),
     ...(gestao.error ? [] : (gestao.data ?? []).map((contato) => contato.email)),
@@ -1050,21 +1050,30 @@ async function enviarRevisaoDaProposta(db: Banco, id: string): Promise<void> {
   const { data, error } = await db.from("erp_propostas").select("cliente_id, titulo").eq("id", id).maybeSingle();
   falhar(error);
   if (!data) throw new DomainError("Proposta não encontrada.");
-  const email = await emailParaRevisaoDoCliente(db, String(data.cliente_id));
+  const emails = await emailsParaRevisaoDoCliente(db, String(data.cliente_id));
   const gerado = await gerarPdfDaProposta(db, id);
   if (!gerado.pdf) throw new DomainError(gerado.message ?? "Não foi possível gerar o PDF da proposta.");
   const mensagem = emailRevisaoProposta(typeof data.titulo === "string" ? data.titulo : "");
+  const anexo = { nome: gerado.nome ?? "proposta.pdf", tipo: "application/pdf", bytes: gerado.pdf };
+  const copiaJaInclusa = emails.some((email) => email.toLowerCase() === COPIA_EMAIL_CLIENTE.toLowerCase());
   try {
-    await enviarEmail({
-      para: email,
-      assunto: mensagem.assunto,
-      texto: mensagem.texto,
-      anexo: { nome: gerado.nome ?? "proposta.pdf", tipo: "application/pdf", bytes: gerado.pdf },
-    });
+    for (const [indice, email] of emails.entries()) {
+      await enviarEmail({
+        para: email,
+        assunto: mensagem.assunto,
+        texto: mensagem.texto,
+        anexo,
+        ...(indice === 0 && !copiaJaInclusa ? { copia: COPIA_EMAIL_CLIENTE } : {}),
+      });
+    }
   } catch (falhaEnvio) {
     const message = falhaEnvio instanceof Error ? falhaEnvio.message : "Não foi possível enviar o e-mail.";
     throw new DomainError(message);
   }
+}
+
+export async function reenviarRevisaoDaProposta(db: Banco, id: string): Promise<void> {
+  await enviarRevisaoDaProposta(db, idDe(id, "Proposta"));
 }
 
 async function novaVersaoProposta(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {

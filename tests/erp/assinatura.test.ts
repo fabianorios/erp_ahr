@@ -19,7 +19,7 @@ import {
   planejarInclusaoContato,
   podePedirAssinatura,
   validarMotivoDevolucao,
-  emailClienteParaRevisao,
+  emailsClienteParaRevisao,
   validarNomeAssinatura,
 } from "../../src/services/erp/assinatura.ts";
 
@@ -100,12 +100,13 @@ describe("assinatura de duas partes", () => {
     assert.throws(() => planejarInclusaoContato(partes, { id: novo, email: "Ana@vis.com.br" }), (erro: unknown) => erro instanceof DomainError && erro.message === MSG_INCLUIR_REPETIDO);
   });
 
-  it("usa o e-mail já gravado no contato quando a pessoa não tem o dela", () => {
-    assert.equal(emailClienteParaRevisao(["  ana@vis.com.br  ", "outro@vis.com.br"]), "ana@vis.com.br");
-    assert.equal(emailClienteParaRevisao([null, "  ", "bia@vis.com.br"]), "bia@vis.com.br");
-    assert.equal(emailClienteParaRevisao(["sem-arroba", "bia@vis.com.br"]), "bia@vis.com.br");
-    assert.throws(() => emailClienteParaRevisao([null, ""]), /Informe o e-mail do cliente/);
-    assert.throws(() => emailClienteParaRevisao(["sem-arroba"]), /inválido/);
+  it("manda a revisão a cada e-mail útil, sem repetir e sem exigir cópia da pessoa", () => {
+    assert.deepEqual(emailsClienteParaRevisao(["  ana@vis.com.br  ", "outro@vis.com.br"]), ["ana@vis.com.br", "outro@vis.com.br"]);
+    assert.deepEqual(emailsClienteParaRevisao([null, "  ", "bia@vis.com.br"]), ["bia@vis.com.br"]);
+    assert.deepEqual(emailsClienteParaRevisao(["sem-arroba", "bia@vis.com.br"]), ["bia@vis.com.br"]);
+    assert.deepEqual(emailsClienteParaRevisao(["Ana@vis.com.br", "ana@vis.com.br", " bia@vis.com.br "]), ["Ana@vis.com.br", "bia@vis.com.br"]);
+    assert.throws(() => emailsClienteParaRevisao([null, ""]), /Informe o e-mail do cliente/);
+    assert.throws(() => emailsClienteParaRevisao(["sem-arroba"]), /inválido/);
   });
 
   it("mascara o e-mail e exige nome e ressalva", () => {

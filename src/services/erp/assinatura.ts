@@ -118,23 +118,27 @@ export function validarEmailAssinatura(valor: string, ausente: string, invalido:
   return email;
 }
 
-export function escolherEmailCliente(valores: unknown[]): string | null {
+export function emailsClienteParaRevisao(valores: unknown[]): string[] {
+  const vistos = new Set<string>();
+  const emails: string[] = [];
+  let invalido = false;
   for (const valor of valores) {
     const email = typeof valor === "string" ? valor.trim() : "";
-    if (EMAIL.test(email)) return email;
+    if (!email) continue;
+    if (!EMAIL.test(email)) {
+      invalido = true;
+      continue;
+    }
+    const chave = email.toLowerCase();
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    emails.push(email);
   }
-  return null;
-}
-
-export function emailClienteParaRevisao(valores: unknown[]): string {
-  const escolhido = escolherEmailCliente(valores);
-  if (escolhido) return escolhido;
-  const bruto = valores.find((valor) => typeof valor === "string" && valor.trim());
-  return validarEmailAssinatura(
-    typeof bruto === "string" ? bruto : "",
-    "Informe o e-mail do cliente antes de enviar a proposta.",
-    "O e-mail do cliente está inválido. Corrija o cadastro da pessoa antes de enviar.",
-  );
+  if (emails.length) return emails;
+  if (invalido) {
+    throw new DomainError("O e-mail do cliente está inválido. Corrija o cadastro da pessoa antes de enviar.");
+  }
+  throw new DomainError("Informe o e-mail do cliente antes de enviar a proposta.");
 }
 
 export function ordenarContatos(valor: unknown): string[] {
