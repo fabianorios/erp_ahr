@@ -19,6 +19,7 @@ import {
   planejarInclusaoContato,
   podePedirAssinatura,
   validarMotivoDevolucao,
+  emailClienteParaRevisao,
   validarNomeAssinatura,
 } from "../../src/services/erp/assinatura.ts";
 
@@ -97,6 +98,14 @@ describe("assinatura de duas partes", () => {
     assert.throws(() => planejarInclusaoContato([{ ...partes[1], status: "assinado" }], { id: novo, email: "bia@vis.com.br" }), (erro: unknown) => erro instanceof DomainError && erro.message === MSG_INCLUIR_AHR);
     assert.throws(() => planejarInclusaoContato(partes, { id: antigo, email: "outro@vis.com.br" }), (erro: unknown) => erro instanceof DomainError && erro.message === MSG_INCLUIR_REPETIDO);
     assert.throws(() => planejarInclusaoContato(partes, { id: novo, email: "Ana@vis.com.br" }), (erro: unknown) => erro instanceof DomainError && erro.message === MSG_INCLUIR_REPETIDO);
+  });
+
+  it("usa o e-mail já gravado no contato quando a pessoa não tem o dela", () => {
+    assert.equal(emailClienteParaRevisao(["  ana@vis.com.br  ", "outro@vis.com.br"]), "ana@vis.com.br");
+    assert.equal(emailClienteParaRevisao([null, "  ", "bia@vis.com.br"]), "bia@vis.com.br");
+    assert.equal(emailClienteParaRevisao(["sem-arroba", "bia@vis.com.br"]), "bia@vis.com.br");
+    assert.throws(() => emailClienteParaRevisao([null, ""]), /Informe o e-mail do cliente/);
+    assert.throws(() => emailClienteParaRevisao(["sem-arroba"]), /inválido/);
   });
 
   it("mascara o e-mail e exige nome e ressalva", () => {

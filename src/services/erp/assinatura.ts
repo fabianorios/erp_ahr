@@ -118,6 +118,25 @@ export function validarEmailAssinatura(valor: string, ausente: string, invalido:
   return email;
 }
 
+export function escolherEmailCliente(valores: unknown[]): string | null {
+  for (const valor of valores) {
+    const email = typeof valor === "string" ? valor.trim() : "";
+    if (EMAIL.test(email)) return email;
+  }
+  return null;
+}
+
+export function emailClienteParaRevisao(valores: unknown[]): string {
+  const escolhido = escolherEmailCliente(valores);
+  if (escolhido) return escolhido;
+  const bruto = valores.find((valor) => typeof valor === "string" && valor.trim());
+  return validarEmailAssinatura(
+    typeof bruto === "string" ? bruto : "",
+    "Informe o e-mail do cliente antes de enviar a proposta.",
+    "O e-mail do cliente está inválido. Corrija o cadastro da pessoa antes de enviar.",
+  );
+}
+
 export function ordenarContatos(valor: unknown): string[] {
   if (!Array.isArray(valor) || valor.length === 0) throw new DomainError("Escolha ao menos um contato.");
   const ids: string[] = [];

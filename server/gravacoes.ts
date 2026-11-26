@@ -53,7 +53,7 @@ import {
   type ModoParcelas,
   type PropostaStatus,
 } from "../src/services/erp/domain.ts";
-import { validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
+import { emailClienteParaRevisao, validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
 import { alterarVencimentoDoTitulo, cancelarBoletoDoTitulo, emitirBoletoDoTitulo, enviarBoletoDoTitulo, enviarKitDoTitulo, situacaoKit } from "./boleto-cora.ts";
 import { enviarEmail } from "./email.ts";
 import { gerarPdfDaProposta } from "./proposta-pdf.ts";
@@ -1033,17 +1033,24 @@ async function mudarProposta(db: Banco, dados: Record<string, unknown>): Promise
   return { id };
 }
 
+async function emailParaRevisaoDoCliente(db: Banco, clienteId: string): Promise<string> {
+  const { data: cliente, error: erroCliente } = await db.from("clients").select("email").eq("id", clienteId).maybeSingle();
+  falhar(erroCliente);
+  const contatos = await db.from("erp_cliente_contatos").select("email").eq("cliente_id", clienteId).order("nome");
+  if (contatos.error && !contatosAusentes(contatos.error)) falhar(contatos.error);
+  const gestao = await db.from("client_contacts").select("email").eq("client_id", clienteId).eq("is_active", true).order("name");
+  return emailClienteParaRevisao([
+    cliente?.email,
+    ...(contatos.data ?? []).map((contato) => contato.email),
+    ...(gestao.error ? [] : (gestao.data ?? []).map((contato) => contato.email)),
+  ]);
+}
+
 async function enviarRevisaoDaProposta(db: Banco, id: string): Promise<void> {
   const { data, error } = await db.from("erp_propostas").select("cliente_id, titulo").eq("id", id).maybeSingle();
   falhar(error);
   if (!data) throw new DomainError("Proposta não encontrada.");
-  const { data: cliente, error: erroCliente } = await db.from("clients").select("email").eq("id", data.cliente_id).maybeSingle();
-  falhar(erroCliente);
-  const email = validarEmailAssinatura(
-    typeof cliente?.email === "string" ? cliente.email : "",
-    "Informe o e-mail do cliente antes de enviar a proposta.",
-    "O e-mail do cliente está inválido. Corrija o cadastro da pessoa antes de enviar.",
-  );
+  const email = await emailParaRevisaoDoCliente(db, String(data.cliente_id));
   const gerado = await gerarPdfDaProposta(db, id);
   if (!gerado.pdf) throw new DomainError(gerado.message ?? "Não foi possível gerar o PDF da proposta.");
   const mensagem = emailRevisaoProposta(typeof data.titulo === "string" ? data.titulo : "");
