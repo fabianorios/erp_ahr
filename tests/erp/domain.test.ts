@@ -39,6 +39,7 @@ import {
   pagarDespesa,
   podeCancelarTitulo,
   podeExcluirTitulo,
+  emailRevisaoProposta,
   htmlAdicionais,
   mostrarResponsabilidadesAntigas,
   normalizarValidade,
@@ -439,6 +440,12 @@ describe("proposta, contrato e título", () => {
     assert.equal(mostrarResponsabilidadesAntigas("<p><br></p>", "", ""), false);
     assert.equal(mostrarResponsabilidadesAntigas("<p>Texto antigo</p>", "<p>Cliente</p>", ""), false);
     assert.equal(mostrarResponsabilidadesAntigas("", "", ""), false);
+    const revisao = emailRevisaoProposta("DIRF mensal");
+    assert.equal(revisao.assunto, "Proposta DIRF mensal — para revisão dos valores");
+    assert.match(revisao.texto, /disponível para revisão dos valores/);
+    assert.match(revisao.texto, /PDF segue em anexo/);
+    assert.doesNotMatch(`${revisao.assunto}\n${revisao.texto}`, /assinatura|código|7 dias/i);
+    assert.throws(() => emailRevisaoProposta("  "), /título da proposta/);
   });
 
   it("leva ao PDF só transporte e refeição cobrados", () => {

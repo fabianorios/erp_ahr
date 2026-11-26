@@ -31,6 +31,7 @@ import {
   reaisToCents,
   registrarBoleto,
   registrarNfse,
+  emailRevisaoProposta,
   transicionarProposta,
   validarCentroIndireto,
   validarCusto,
@@ -54,6 +55,8 @@ import {
 } from "../src/services/erp/domain.ts";
 import { validarEmailAssinatura, validarNomeAssinatura } from "../src/services/erp/assinatura.ts";
 import { alterarVencimentoDoTitulo, cancelarBoletoDoTitulo, emitirBoletoDoTitulo, enviarBoletoDoTitulo, enviarKitDoTitulo, situacaoKit } from "./boleto-cora.ts";
+import { enviarEmail } from "./email.ts";
+import { gerarPdfDaProposta } from "./proposta-pdf.ts";
 import { cancelarNfseDoTitulo, emitirNfseECriarTitulo, gravarPdfDaNota } from "./nfse-nacional.ts";
 
 type Banco = SupabaseClient;
@@ -1016,6 +1019,7 @@ async function mudarProposta(db: Banco, dados: Record<string, unknown>): Promise
     const soma = (agenda?.parcelas ?? []).reduce((total, parcela) => total + parcela.valor, 0);
     if (!agenda || soma !== valor) throw new DomainError("A proposta aceita precisa das parcelas somando o valor total.");
   }
+  if (acao === "enviar") await enviarRevisaoDaProposta(db, id);
   const { data, error } = await db.from("erp_propostas").update({ status }).eq("id", id).select("id");
   falhar(error);
   if (!data?.length) throw new DomainError("Proposta não encontrada.");
@@ -1027,6 +1031,33 @@ async function mudarProposta(db: Banco, dados: Record<string, unknown>): Promise
     falhar(gerado.error);
   }
   return { id };
+}
+
+async function enviarRevisaoDaProposta(db: Banco, id: string): Promise<void> {
+  const { data, error } = await db.from("erp_propostas").select("cliente_id, titulo").eq("id", id).maybeSingle();
+  falhar(error);
+  if (!data) throw new DomainError("Proposta não encontrada.");
+  const { data: cliente, error: erroCliente } = await db.from("clients").select("email").eq("id", data.cliente_id).maybeSingle();
+  falhar(erroCliente);
+  const email = validarEmailAssinatura(
+    typeof cliente?.email === "string" ? cliente.email : "",
+    "Informe o e-mail do cliente antes de enviar a proposta.",
+    "O e-mail do cliente está inválido. Corrija o cadastro da pessoa antes de enviar.",
+  );
+  const gerado = await gerarPdfDaProposta(db, id);
+  if (!gerado.pdf) throw new DomainError(gerado.message ?? "Não foi possível gerar o PDF da proposta.");
+  const mensagem = emailRevisaoProposta(typeof data.titulo === "string" ? data.titulo : "");
+  try {
+    await enviarEmail({
+      para: email,
+      assunto: mensagem.assunto,
+      texto: mensagem.texto,
+      anexo: { nome: gerado.nome ?? "proposta.pdf", tipo: "application/pdf", bytes: gerado.pdf },
+    });
+  } catch (falhaEnvio) {
+    const message = falhaEnvio instanceof Error ? falhaEnvio.message : "Não foi possível enviar o e-mail.";
+    throw new DomainError(message);
+  }
 }
 
 async function novaVersaoProposta(db: Banco, dados: Record<string, unknown>): Promise<{ id?: string }> {

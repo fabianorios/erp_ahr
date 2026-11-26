@@ -1081,6 +1081,17 @@ export function assertPropostaEditavel(status: PropostaStatus): void {
   }
 }
 
+export function emailRevisaoProposta(titulo: string): { assunto: string; texto: string } {
+  const nome = titulo.replace(/\s+/g, " ").trim();
+  if (!nome) throw new DomainError("Informe o título da proposta.");
+  return {
+    assunto: `Proposta ${nome} — para revisão dos valores`,
+    texto: `Olá.
+
+A proposta ${nome} está disponível para revisão dos valores. O PDF segue em anexo.`,
+  };
+}
+
 export function transicionarProposta(status: PropostaStatus, acao: "enviar" | "aceitar" | "recusar" | "expirar"): PropostaStatus {
   const destino = { enviar: "enviada", aceitar: "aceita", recusar: "recusada", expirar: "expirada" }[acao] as PropostaStatus;
   const permitida =
